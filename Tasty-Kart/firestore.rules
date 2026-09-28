@@ -1,0 +1,359 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ── Helper Functions ──
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Check admin role from custom claims or email mapping
+    function hasAdminRole(role) {
+      return isSignedIn() && request.auth.token.adminRole == role;
+    }
+
+    // Email-based role mapping (fallback for development)
+    function getEmailRole() {
+      return request.auth.token.email == 'admin123@gmail.com' ? 'SUPER_ADMIN' :
+             request.auth.token.email == 'uday@gmail.com' ? 'OPERATIONS_ADMIN' : 
+             null;
+    }
+
+    function isSuperAdmin() {
+      return hasAdminRole('SUPER_ADMIN') || 
+             (isSignedIn() && getEmailRole() == 'SUPER_ADMIN');
+    }
+
+    function isOperationsAdmin() {
+      return hasAdminRole('OPERATIONS_ADMIN') || 
+             (isSignedIn() && getEmailRole() == 'OPERATIONS_ADMIN') || 
+             isSuperAdmin();
+    }
+
+    function isFinanceAdmin() {
+      return hasAdminRole('FINANCE_ADMIN') || 
+             (isSignedIn() && getEmailRole() == 'FINANCE_ADMIN') || 
+             isSuperAdmin();
+    }
+
+    function isSupportAdmin() {
+      return hasAdminRole('SUPPORT_ADMIN') || 
+             (isSignedIn() && getEmailRole() == 'SUPPORT_ADMIN') || 
+             isSuperAdmin();
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || isOperationsAdmin() || isFinanceAdmin() || isSupportAdmin();
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isPartner(partnerId) {
+      return isSignedIn() && request.auth.uid == partnerId;
+    }
+
+    function getPartnerDoc(partnerId) {
+      return get(/databases/$(database)/documents/deliveryPartners/$(partnerId)).data;
+    }
+
+    function isApprovedPartner(partnerId) {
+      let partnerData = getPartnerDoc(partnerId);
+      return partnerData.approved == true && partnerData.status != 'blocked';
+    }
+
+    // ── Users Collection ──
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) || isAdmin();
+    }
+
+    // ── DELIVERY MANAGEMENT COLLECTIONS (NEW) ──
+
+    // Cities Collection
+    match /cities/{cityId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin() || isOperationsAdmin();
+    }
+
+    // Zones Collection
+    match /zones/{zoneId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin() || isOperationsAdmin();
+    }
+
+    // Slots Collection
+    match /slots/{slotId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin() || isOperationsAdmin();
+    }
+
+    // Slot Bookings Collection
+    match /slotBookings/{bookingId} {
+      allow read: if isSignedIn() && 
+        (resource.data.partnerId == request.auth.uid || isAdmin());
+      allow create: if isPartner(request.resource.data.partnerId) && 
+        isApprovedPartner(request.auth.uid);
+      allow update, delete: if isSuperAdmin() || isOperationsAdmin();
+    }
+
+    // ── EARNING MANAGEMENT COLLECTIONS (NEW) ──
+
+    // Earning Rules Collection
+    match /earningRules/{ruleId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin() || isFinanceAdmin();
+    }
+
+    // Earnings Collection (per-order earnings)
+    match /earnings/{earningId} {
+      allow read: if isSignedIn() && 
+        (resource.data.deliveryPartnerId == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();  // Only Cloud Functions
+    }
+
+    // Partner Levels Collection
+    match /partnerLevels/{levelId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    // ── WALLET & PAYOUT COLLECTIONS (NEW) ──
+
+    // Wallet Transactions Collection
+    match /walletTransactions/{txnId} {
+      allow read: if isSignedIn() && 
+        (resource.data.deliveryBoyId == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin() || isSuperAdmin();  // Only Cloud Functions
+    }
+
+    // Payout Requests Collection
+    match /payoutRequests/{payoutId} {
+      allow read: if isSignedIn() && 
+        (resource.data.deliveryBoyId == request.auth.uid || isAdmin());
+      allow create: if isPartner(request.resource.data.deliveryBoyId) && 
+        isApprovedPartner(request.auth.uid);
+      allow update: if isSuperAdmin() || isFinanceAdmin();  // Approve/reject
+      allow delete: if isSuperAdmin();
+    }
+
+    // ── INCENTIVE COLLECTIONS (NEW) ──
+
+    // Incentive Campaigns Collection
+    match /incentiveCampaigns/{campaignId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin() || isFinanceAdmin();
+    }
+
+    // Incentive Tiers (nested in campaigns or separate)
+    match /incentiveTiers/{tierId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin() || isFinanceAdmin();
+    }
+
+    // Incentive Progress Collection
+    match /incentiveProgress/{progressId} {
+      allow read: if isSignedIn() && 
+        (resource.data.partnerId == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();  // Only Cloud Functions
+    }
+
+    // ── AUDIT LOG COLLECTION (NEW) ──
+
+    // Admin Audit Log Collection
+    match /adminAuditLog/{logId} {
+      allow read: if isSuperAdmin();  // Only Super Admin can view audit logs
+      allow create, update, delete: if isAdmin();  // Cloud Functions create
+    }
+
+    // ── Orders Collection (Live Dispatch + Delivery Partner Access) ──
+    match /orders/{orderId} {
+      // Partners can read orders assigned to them or unassigned orders in their city
+      allow read: if isSignedIn() && (
+        resource.data.deliveryPartnerId == request.auth.uid ||
+        (resource.data.deliveryPartnerId == '' && 
+         resource.data.status in ['accepted', 'preparing', 'ready'] &&
+         getPartnerDoc(request.auth.uid).city == resource.data.restaurantCity)
+      ) || isAdmin() || true;  // 'true' allows public read for customer app
+
+      // Partners can update specific fields for their assigned orders
+      allow update: if (isPartner(resource.data.deliveryPartnerId) && 
+        isApprovedPartner(request.auth.uid) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['partnerAccepted', 'deliveryStage', 'status', 'pickedAt', 
+                   'deliveredAt', 'collectedVia', 'deniedPartnerId', 'updatedAt']) &&
+        (
+          (resource.data.status == 'ready' && request.resource.data.status == 'picked') ||
+          (resource.data.status == 'picked' && request.resource.data.status == 'delivered') ||
+          (resource.data.status in ['accepted', 'preparing', 'ready'] && 
+           request.resource.data.status == 'cancelled' && 
+           request.resource.data.cancelledBy == request.auth.uid)
+        )) || isAdmin() || true;
+
+      // Signed-in customers can create their own orders (pre-write before Razorpay).
+      allow create: if isSignedIn() || isAdmin();
+
+      // Admin can delete; customers can delete their own pending orders
+      // (used to clean up when Razorpay payment is cancelled).
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.customerId == request.auth.uid);
+
+      // ── Order Chat Subcollection ──
+      // Allows the customer, the assigned delivery partner, and admins to read/write chat messages.
+      match /chat/{messageId} {
+        allow read: if isSignedIn() && (
+          get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid ||
+          get(/databases/$(database)/documents/orders/$(orderId)).data.deliveryPartnerId == request.auth.uid ||
+          isAdmin()
+        );
+        allow create: if isSignedIn() && (
+          get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid ||
+          get(/databases/$(database)/documents/orders/$(orderId)).data.deliveryPartnerId == request.auth.uid ||
+          isAdmin()
+        );
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    // ── Delivery Partners Collection ──
+    match /deliveryPartners/{partnerId} {
+      // Partner can read their own document, admin can read all
+      allow read: if isPartner(partnerId) || isAdmin() || true;  // 'true' for admin UI
+      
+      // Partner can update specific fields in their own document
+      allow update: if (isPartner(partnerId) && 
+        // Only allow updating these fields
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'email', 'phone', 'city', 'dateOfBirth', 'gender', 'currentLat', 'currentLng', 'lastLocationUpdate', 
+                   'status', 'avatar', 'vehicle', 'vehicleNumber', 'documents', 'documentsComplete',
+                   'accountHolderName', 'bankAccount', 'ifsc', 'ifscVerified', 'upiId', 
+                   'trainingCompleted', 'trainingComplete', 'termsAccepted', 'legalAccepted', 
+                   'activationAcknowledged', 'bookedSlots', 'notificationsEnabled', 
+                   'fcmTokens', 'cashInHand', 'onlineSince', 'onlineMinutesToday',
+                   'onlineMinutesDate', 'dailyTargetBonusDate', 'pocketBalance',
+                   'rating', 'ratingSum', 'ratingCount', 'updatedAt']) &&
+        // Cannot change critical fields
+        request.resource.data.approved == resource.data.approved &&
+        request.resource.data.status != 'blocked') || isAdmin() || true;  // 'true' for admin UI
+      
+      // Only admin can create new partners
+      allow create: if isAdmin() || true;  // 'true' for development
+      
+      // Only admin can delete
+      allow delete: if isAdmin();
+      
+      // Subcollections - Slots
+      match /slots/{date} {
+        allow read, write: if isPartner(partnerId) || isAdmin();
+      }
+      
+      // Subcollections - Location History
+      match /locations/{locationId} {
+        allow read: if isAdmin();
+        allow create: if isPartner(partnerId) && isApprovedPartner(partnerId);
+      }
+    }
+
+    // ── Restaurants & Categories ──
+    match /restaurants/{restaurantId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+    match /restaurantCategories/{catId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+
+    // ── Food Items & Categories ──
+    match /foodItems/{foodId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+    match /foodCategories/{catId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+    match /addons/{addonId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+
+    // ── Coupons & Offers ──
+    match /coupons/{couponId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+    match /offers/{offerId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+
+    // ── Banners ──
+    match /banners/{bannerId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+
+    // ── Reviews ──
+    match /reviews/{reviewId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+
+    // ── Customers ──
+    match /customers/{customerId} {
+      allow read, write: if true;  // TODO: Lock down before production
+
+      // Saved payment cards — each user can only read/write their own cards.
+      match /savedCards/{cardId} {
+        allow read, write: if isOwner(customerId);
+      }
+    }
+
+    // ── Transactions / Payments (Partner Earnings & Withdrawals) ──
+    match /transactions/{transactionId} {
+      // Partners can read their own transactions
+      allow read: if isSignedIn() && 
+        resource.data.partnerId == request.auth.uid || isAdmin() || true;  // 'true' for admin UI
+      
+      // Only admin/functions can create, update, delete
+      allow write: if isAdmin() || true;  // 'true' for development
+    }
+
+    // ── Subscriptions ──
+    match /subscriptions/{subId} {
+      allow read, write: if true;  // TODO: Lock down before production
+    }
+
+    // ── Notifications (Delivery Partner Notifications) ──
+    match /notifications/{notifId} {
+      // Partners can read their own notifications
+      allow read: if isSignedIn() && 
+        resource.data.userId == request.auth.uid || isAdmin() || true;  // 'true' for admin UI
+      
+      // Partners can mark as read
+      allow update: if (isPartner(resource.data.userId) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['read'])) || isAdmin() || true;  // 'true' for admin UI
+      
+      // Only admin/functions can create notifications
+      allow create: if isAdmin() || true;  // 'true' for development
+      
+      // Partners can delete their own read notifications
+      allow delete: if (isPartner(resource.data.userId) && 
+        resource.data.read == true) || isAdmin();
+    }
+
+    match /cashDeposits/{depositId} {
+      allow read: if isSignedIn() || true;
+      allow write: if false;
+    }
+
+    // ── Surge requests from delivery partners ──
+    match /surgeRequests/{requestId} {
+      allow read: if true;
+      allow create: if isSignedIn() || true;
+      allow update, delete: if isAdmin() || true;
+    }
+
+    // ── Admin Platform Settings (includes delivery partner settings) ──
+    match /settings/{docId} {
+      // Everyone can read settings
+      allow read: if true;
+      
+      // Only admin can write
+      allow write: if isAdmin() || true;  // 'true' for development
+    }
+  }
+}

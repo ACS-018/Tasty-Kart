@@ -1,0 +1,48 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "tasty_kart_userapp_flutter",
+            "cwd": "tasty_kart_userapp_flutter",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "tasty_kart_userapp_flutter (profile mode)",
+            "cwd": "tasty_kart_userapp_flutter",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "tasty_kart_userapp_flutter (release mode)",
+            "cwd": "tasty_kart_userapp_flutter",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        },
+        {
+            "name": "tastykart_deliveryboy_flutter",
+            "cwd": "tastykart_deliveryboy_flutter",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "tastykart_deliveryboy_flutter (profile mode)",
+            "cwd": "tastykart_deliveryboy_flutter",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "tastykart_deliveryboy_flutter (release mode)",
+            "cwd": "tastykart_deliveryboy_flutter",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        }
+    ]
+}

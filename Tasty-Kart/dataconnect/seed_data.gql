@@ -1,0 +1,27 @@
+mutation SeedData @transaction {
+  user_insertMany(data: [
+    { id: "00000000-0000-0000-0000-000000000001", email: "alice@example.com", displayName: "Alice" },
+    { id: "00000000-0000-0000-0000-000000000002", email: "bob@example.com", displayName: "Bob" },
+    { id: "00000000-0000-0000-0000-000000000003", email: "charlie@example.com", displayName: "Charlie" }
+  ])
+  project_insertMany(data: [
+    { id: "11111111-1111-1111-1111-111111111111", name: "Alpha", ownerId: "00000000-0000-0000-0000-000000000001" },
+    { id: "11111111-1111-1111-1111-111111111112", name: "Beta", ownerId: "00000000-0000-0000-0000-000000000002" },
+    { id: "11111111-1111-1111-1111-111111111113", name: "Gamma", ownerId: "00000000-0000-0000-0000-000000000003" }
+  ])
+  task_insertMany(data: [
+    { id: "22222222-2222-2222-2222-222222222221", title: "Setup Repo", projectId: "11111111-1111-1111-1111-111111111111", status: "Open", assigneeId: "00000000-0000-0000-0000-000000000001" },
+    { id: "22222222-2222-2222-2222-222222222222", title: "Database Design", projectId: "11111111-1111-1111-1111-111111111111", status: "Done", assigneeId: "00000000-0000-0000-0000-000000000002" },
+    { id: "22222222-2222-2222-2222-222222222223", title: "API Docs", projectId: "11111111-1111-1111-1111-111111111112", status: "InProgress", assigneeId: "00000000-0000-0000-0000-000000000003" }
+  ])
+  comment_insertMany(data: [
+    { taskId: "22222222-2222-2222-2222-222222222221", userId: "00000000-0000-0000-0000-000000000002", content: "Great start!" },
+    { taskId: "22222222-2222-2222-2222-222222222222", userId: "00000000-0000-0000-0000-000000000001", content: "Looks good." },
+    { taskId: "22222222-2222-2222-2222-222222222223", userId: "00000000-0000-0000-0000-000000000003", content: "Working on it." }
+  ])
+  projectMember_insertMany(data: [
+    { projectId: "11111111-1111-1111-1111-111111111111", userId: "00000000-0000-0000-0000-000000000001", role: "Owner" },
+    { projectId: "11111111-1111-1111-1111-111111111111", userId: "00000000-0000-0000-0000-000000000002", role: "Member" },
+    { projectId: "11111111-1111-1111-1111-111111111112", userId: "00000000-0000-0000-0000-000000000002", role: "Owner" }
+  ])
+}

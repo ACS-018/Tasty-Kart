@@ -1,0 +1,135 @@
+mutation CreateUser($data: User_Data!) @auth(level: USER) {
+  user_insert(data: $data)
+}
+
+mutation UpdateUser($key: User_Key!, $data: User_Data!) @auth(level: USER) {
+  user_update(key: $key, data: $data)
+}
+
+mutation DeleteUser($key: User_Key!) @auth(level: USER) {
+  user_delete(key: $key)
+}
+
+query GetUser($key: User_Key!) @auth(level: USER) {
+  user(key: $key) {
+    id
+    email
+    displayName
+  }
+}
+
+query ListUsers @auth(level: PUBLIC, insecureReason: "Publicly accessible user directory") {
+  users {
+    id
+    displayName
+  }
+}
+
+mutation CreateProject($data: Project_Data!) @auth(level: USER) {
+  project_insert(data: $data)
+}
+
+mutation UpdateProject($key: Project_Key!, $data: Project_Data!) @auth(level: USER) {
+  project_update(key: $key, data: $data)
+}
+
+mutation DeleteProject($key: Project_Key!) @auth(level: USER) {
+  project_delete(key: $key)
+}
+
+query GetProject($key: Project_Key!) @auth(level: USER) {
+  project(key: $key) {
+    name
+    description
+  }
+}
+
+query ListProjects @auth(level: PUBLIC, insecureReason: "Publicly viewable projects") {
+  projects {
+    id
+    name
+  }
+}
+
+mutation CreateTask($data: Task_Data!) @auth(level: USER) {
+  task_insert(data: $data)
+}
+
+mutation UpdateTask($key: Task_Key!, $data: Task_Data!) @auth(level: USER) {
+  task_update(key: $key, data: $data)
+}
+
+mutation DeleteTask($key: Task_Key!) @auth(level: USER) {
+  task_delete(key: $key)
+}
+
+query GetTask($key: Task_Key!) @auth(level: USER) {
+  task(key: $key) {
+    title
+    status
+    assignee {
+      displayName
+    }
+  }
+}
+
+query ListTasks @auth(level: USER) {
+  tasks {
+    id
+    title
+  }
+}
+
+mutation CreateComment($data: Comment_Data!) @auth(level: USER) {
+  comment_insert(data: $data)
+}
+
+mutation UpdateComment($key: Comment_Key!, $data: Comment_Data!) @auth(level: USER) {
+  comment_update(key: $key, data: $data)
+}
+
+mutation DeleteComment($key: Comment_Key!) @auth(level: USER) {
+  comment_delete(key: $key)
+}
+
+query GetComment($key: Comment_Key!) @auth(level: USER) {
+  comment(key: $key) {
+    content
+    createdAt
+  }
+}
+
+query ListComments @auth(level: USER) {
+  comments {
+    id
+    content
+  }
+}
+
+mutation CreateProjectMember($data: ProjectMember_Data!) @auth(level: USER) {
+  projectMember_insert(data: $data)
+}
+
+mutation UpdateProjectMember($key: ProjectMember_Key!, $data: ProjectMember_Data!) @auth(level: USER) {
+  projectMember_update(key: $key, data: $data)
+}
+
+mutation DeleteProjectMember($key: ProjectMember_Key!) @auth(level: USER) {
+  projectMember_delete(key: $key)
+}
+
+query GetProjectMember($key: ProjectMember_Key!) @auth(level: USER) {
+  projectMember(key: $key) {
+    role
+    user {
+      displayName
+    }
+  }
+}
+
+query ListProjectMembers @auth(level: USER) {
+  projectMembers {
+    id
+    role
+  }
+}

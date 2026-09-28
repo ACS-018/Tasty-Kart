@@ -1,0 +1,54 @@
+name: tastykart_deliveryboy
+description: "TastyKart delivery partner app."
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # Firebase Core
+  firebase_core: ^3.13.1
+  
+  # Firebase Services
+  firebase_auth: ^5.5.1
+  cloud_firestore: ^5.6.6
+  firebase_storage: ^12.4.10
+  firebase_messaging: ^15.1.8
+  firebase_analytics: ^11.4.0
+  firebase_performance: ^0.10.1+1
+  firebase_crashlytics: ^4.1.8
+  cloud_functions: ^5.2.3
+  razorpay_flutter: ^1.4.0
+  
+  # UI & Image
+  image_picker: ^1.1.2
+  qr_flutter: ^4.1.0
+  video_player: ^2.10.0
+  
+  # Network
+  http: ^1.4.0
+  url_launcher: ^6.3.1
+  
+  # Maps & Location
+  google_maps_flutter: ^2.12.1
+  geocoding: ^4.0.0
+  geolocator: ^14.0.0
+  
+  # Local Storage & State
+  shared_preferences: ^2.3.5
+  flutter_local_notifications: ^18.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

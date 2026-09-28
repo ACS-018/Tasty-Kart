@@ -1,0 +1,13 @@
+{
+  "projects": {
+    "default": "tastykart-b791a"
+  },
+  "targets": {
+    "tastykart-b791a": {
+      "hosting": {
+        "admin":   ["tastykart-b791a"],
+        "landing": ["tastykart-landing"]
+      }
+    }
+  }
+}

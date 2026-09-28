@@ -39,7 +39,7 @@ class _CashLimitBanner extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Cash limit reached. Pay ${rupee(due)} to go online.',
+                  'Cash limit reached. You are offline — pay your cash in hand of ${rupee(due)} to TastyKart to go online.',
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
                     color: AppColors.textDark,

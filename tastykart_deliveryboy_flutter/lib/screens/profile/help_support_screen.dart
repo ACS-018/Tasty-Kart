@@ -4,7 +4,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../constants/color_constants.dart';
 import '../../constants/support_topics.dart';
 import '../../models/delivery_partner.dart';
+import '../../models/support_ticket.dart';
 import '../../services/settings_service.dart';
+import '../../services/support_ticket_service.dart';
 import '../../utils/app_navigation.dart';
 import '../../widgets/page_header.dart';
 import 'my_tickets_screen.dart';
@@ -44,7 +46,7 @@ class HelpSupportScreen extends StatelessWidget {
                     const Padding(
                       padding: EdgeInsets.only(bottom: 10),
                       child: Text(
-                        'What do you need help with?',
+                        'Need help with an order or payment?',
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w800,
@@ -366,6 +368,31 @@ class _MyTicketsButton extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+            StreamBuilder<List<SupportTicket>>(
+              stream: SupportTicketService.watchForPartner(partnerId),
+              builder: (context, snap) {
+                final unread =
+                    (snap.data ?? const []).where((t) => t.unreadByPartner).length;
+                if (unread == 0) return const SizedBox.shrink();
+                return Container(
+                  margin: const EdgeInsets.only(right: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '$unread new',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.white,
+                    ),
+                  ),
+                );
+              },
             ),
             const Icon(Icons.chevron_right_rounded, color: AppColors.textLight),
           ],

@@ -38,7 +38,7 @@ class _CashDepositScreenState extends State<CashDepositScreen> {
       return;
     }
     setState(() => _busy = true);
-    final result = await _payments.payExcess(
+    final result = await _payments.payCashInHand(
       partnerId: widget.partner.id,
       name: widget.partner.name,
       phone: widget.partner.phone,
@@ -49,7 +49,7 @@ class _CashDepositScreenState extends State<CashDepositScreen> {
     if (result.isFullyVerified) {
       AppFeedback.showSuccess(
         context,
-        'Payment verified. Cash in hand is updated. You can go online.',
+        'Payment verified. Cash in hand is now ₹0. You can go online.',
       );
       Navigator.pop(context, true);
       return;
@@ -73,7 +73,7 @@ class _CashDepositScreenState extends State<CashDepositScreen> {
         foregroundColor: AppColors.textDark,
         elevation: 0,
         title: const Text(
-          'Pay excess cash',
+          'Pay cash to TastyKart',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
       ),
@@ -96,7 +96,8 @@ class _CashDepositScreenState extends State<CashDepositScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Limit ${rupee(widget.cashLimit)}. Pay ${rupee(due)} to TastyKart, then you can go online.',
+                  'This is cash you collected from customers. It belongs to TastyKart, not your earnings. '
+                  'You reached the ${rupee(widget.cashLimit)} limit, so pay it all to go online again.',
                   style: const TextStyle(
                     color: AppColors.textMedium,
                     height: 1.4,
@@ -112,7 +113,7 @@ class _CashDepositScreenState extends State<CashDepositScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'This payment uses the TastyKart account. After it is verified, the extra amount is removed from your cash in hand.',
+            'Pay securely with Razorpay (UPI, card or net banking) to TastyKart. Once it is verified, your cash in hand goes back to ₹0 and you can go online. Your Pocket Balance is not touched.',
             style: TextStyle(color: AppColors.textMedium, height: 1.4),
           ),
           const SizedBox(height: 24),

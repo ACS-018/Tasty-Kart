@@ -32,6 +32,10 @@ const statusDot: Record<PartnerStatus, string> = {
 
 const ACTIVE_DELIVERY = new Set(['accepted', 'preparing', 'ready', 'picked'])
 
+function cityKey(city?: string) {
+  return String(city || '').trim().toLowerCase()
+}
+
 function isOnDuty(status: string) {
   const value = (status || '').toLowerCase()
   return value === 'online' || value === 'available' || value === 'busy'
@@ -40,6 +44,7 @@ function isOnDuty(status: string) {
 export function DeliveryMapView() {
   const [partnersList, setPartnersList] = useState<DeliveryPartner[]>([])
   const [orders, setOrders] = useState<Order[]>([])
+  const [cities, setCities] = useState<{ id: string; name?: string; isActive?: boolean }[]>([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<DeliveryPartner | null>(null)
   const [filterStatus, setFilterStatus] = useState<'all' | 'online' | 'busy'>('all')
@@ -67,6 +72,8 @@ export function DeliveryMapView() {
 
   useEffect(() => subscribeToCollection<Order>('orders', setOrders), [])
 
+  useEffect(() => subscribeToCollection<{ id: string; name?: string; isActive?: boolean }>('cities', setCities), [])
+
   const dutyOf = (partner: DeliveryPartner): 'online' | 'busy' | null => {
     if (!isOnDuty(partner.status)) return null
     const ids = [partner.id, partner.uid].filter(Boolean) as string[]
@@ -77,22 +84,29 @@ export function DeliveryMapView() {
     return delivering ? 'busy' : 'online'
   }
 
-  const onDutyPartners = partnersList.filter(p => dutyOf(p))
+  // Only cities configured on the Cities page
+  const uniqueCities = (() => {
+    const byKey = new Map<string, string>()
+    for (const city of cities) {
+      if (city.isActive === false) continue
+      const label = String(city.name || '').trim()
+      if (label && !byKey.has(cityKey(label))) byKey.set(cityKey(label), label)
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b))
+  })()
+  const cityKeys = new Set(uniqueCities.map(cityKey))
+
+  const onDutyPartners = partnersList.filter(p => dutyOf(p) && cityKeys.has(cityKey(p.city)))
 
   const filteredPartners = onDutyPartners.filter(p => {
     const duty = dutyOf(p)
     if (filterStatus !== 'all' && duty !== filterStatus) return false
-    if (filterCity && p.city !== filterCity) return false
+    if (filterCity && cityKey(p.city) !== cityKey(filterCity)) return false
     return true
   })
 
   // Only partners with valid coords go on the map
   const mappablePartners = filteredPartners.filter(p => p.currentLat && p.currentLng)
-
-  // Unique cities for city filter dropdown
-  const uniqueCities = Array.from(
-    new Set(onDutyPartners.map(p => p.city).filter(Boolean))
-  ).sort()
 
   const stats = [
     { label: 'Online', value: onDutyPartners.filter(p => dutyOf(p) === 'online').length, icon: CheckCircle, color: 'text-green-600' },

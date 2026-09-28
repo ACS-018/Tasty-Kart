@@ -37,9 +37,13 @@ function isCancelledOrder(status: unknown) {
   return value === 'cancelled' || value === 'canceled' || value === 'refunded' || value.includes('cancel')
 }
 
+/** Restaurant revenue for an order: amount collected minus delivery fee and tip. */
 function orderAmount(order: Order) {
+  const record = order as Order & Record<string, unknown>
+  const deliveryFee = Number(record.deliveryFee) || 0
+  const tip = Number(record.tip) || 0
   const total = Number(order.total) || 0
-  if (total > 0) return total
+  if (total > 0) return Math.max(0, total - deliveryFee - tip)
   const items = Array.isArray(order.items) ? order.items : []
   const fromItems = items.reduce((sum, item) => {
     const price = Number(item?.price) || 0
@@ -47,15 +51,63 @@ function orderAmount(order: Order) {
     return sum + price * (qty > 0 ? qty : 1)
   }, 0)
   if (fromItems > 0) return fromItems
-  const record = order as Order & Record<string, unknown>
   const computed =
     (Number(record.subtotal) || 0) +
     (Number(record.tax) || 0) +
-    (Number(record.deliveryFee) || 0) +
-    (Number(record.platformFee) || 0) +
-    (Number(record.tip) || 0) -
+    (Number(record.platformFee) || 0) -
     (Number(record.discount) || 0)
   return computed > 0 ? computed : 0
+}
+
+type Period = 'monthly' | 'yearly'
+
+function currentMonthValue() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** Start/end of the selected period and of the period before it (for trend comparison). */
+function periodRange(period: Period, month: string, year: number) {
+  if (period === 'yearly') {
+    return {
+      start: new Date(year, 0, 1),
+      end: new Date(year + 1, 0, 1),
+      prevStart: new Date(year - 1, 0, 1),
+      label: String(year),
+      prevLabel: String(year - 1),
+    }
+  }
+  const [y, m] = month.split('-').map(Number)
+  const start = new Date(y, m - 1, 1)
+  return {
+    start,
+    end: new Date(y, m, 1),
+    prevStart: new Date(y, m - 2, 1),
+    label: start.toLocaleString('en-IN', { month: 'long', year: 'numeric' }),
+    prevLabel: new Date(y, m - 2, 1).toLocaleString('en-IN', { month: 'short' }),
+  }
+}
+
+function inRange(order: Order, start: Date, end: Date) {
+  const t = toDate(order.createdAt).getTime()
+  return t >= start.getTime() && t < end.getTime()
+}
+
+function orderRevenue(order: Order) {
+  return isCancelledOrder(order.status) ? 0 : Math.max(0, Number(order.total) || 0)
+}
+
+function trendOf(current: number, previous: number, prevLabel: string): { trend: StatItem['trend']; changeLabel: string } {
+  if (previous <= 0) {
+    return current > 0
+      ? { trend: 'up', changeLabel: `New vs ${prevLabel}` }
+      : { trend: 'neutral', changeLabel: `— vs ${prevLabel}` }
+  }
+  const pct = Math.round(((current - previous) / previous) * 100)
+  return {
+    trend: pct > 0 ? 'up' : pct < 0 ? 'down' : 'neutral',
+    changeLabel: `${pct > 0 ? '+' : ''}${pct}% vs ${prevLabel}`,
+  }
 }
 
 function compactRevenue(amount: number) {
@@ -134,45 +186,65 @@ export function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('')
   const [ordersPage, setOrdersPage] = useState(0)
   const [chartMetric, setChartMetric] = useState<'revenue' | 'orders'>('revenue')
+  const [period, setPeriod] = useState<Period>('monthly')
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthValue)
+  const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear())
 
   // Modal states
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null)
 
-  // ── Last 6 months of real orders, used by both chart modes ───────────────
-  const monthlyChart = useMemo(() => {
-    const now = new Date()
-    const buckets = Array.from({ length: 6 }, (_, i) => {
-      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1)
-      return {
-        key: `${d.getFullYear()}-${d.getMonth()}`,
-        month: d.toLocaleString('en-IN', { month: 'short' }),
-        revenue: 0,
-        orders: 0,
-      }
-    })
-    const index = new Map(buckets.map((bucket, i) => [bucket.key, i]))
+  const range = useMemo(
+    () => periodRange(period, selectedMonth, selectedYear),
+    [period, selectedMonth, selectedYear],
+  )
+  const periodOrders = useMemo(
+    () => ordersList.filter(order => inRange(order, range.start, range.end)),
+    [ordersList, range],
+  )
+  const previousOrders = useMemo(
+    () => ordersList.filter(order => inRange(order, range.prevStart, range.start)),
+    [ordersList, range],
+  )
+
+  const yearOptions = useMemo(() => {
+    const years = new Set<number>([new Date().getFullYear(), selectedYear])
     ordersList.forEach(order => {
+      const t = toDate(order.createdAt)
+      if (t.getTime() > 0 && !Number.isNaN(t.getTime())) years.add(t.getFullYear())
+    })
+    return [...years].sort((a, b) => b - a)
+  }, [ordersList, selectedYear])
+
+  // ── Chart: days of the selected month, or months of the selected year ─────
+  const periodChart = useMemo(() => {
+    const buckets = period === 'yearly'
+      ? Array.from({ length: 12 }, (_, i) => ({
+          label: new Date(selectedYear, i, 1).toLocaleString('en-IN', { month: 'short' }),
+          revenue: 0,
+          orders: 0,
+        }))
+      : Array.from(
+          { length: new Date(range.start.getFullYear(), range.start.getMonth() + 1, 0).getDate() },
+          (_, i) => ({ label: String(i + 1), revenue: 0, orders: 0 }),
+        )
+    periodOrders.forEach(order => {
       const created = toDate(order.createdAt)
-      if (Number.isNaN(created.getTime()) || created.getTime() === 0) return
-      const slot = index.get(`${created.getFullYear()}-${created.getMonth()}`)
-      if (slot === undefined) return
+      const slot = period === 'yearly' ? created.getMonth() : created.getDate() - 1
+      if (!buckets[slot]) return
       buckets[slot].orders += 1
-      const status = String(order.status || '').toLowerCase()
-      if (status !== 'cancelled' && status !== 'refunded') {
-        buckets[slot].revenue += Number(order.total) || 0
-      }
+      buckets[slot].revenue += orderRevenue(order)
     })
     return buckets
-  }, [ordersList])
+  }, [periodOrders, period, selectedYear, range])
 
   const chartTotal = useMemo(
-    () => monthlyChart.reduce(
+    () => periodChart.reduce(
       (sum, row) => sum + (chartMetric === 'revenue' ? row.revenue : row.orders),
       0,
     ),
-    [monthlyChart, chartMetric],
+    [periodChart, chartMetric],
   )
 
   // ── Live Weekly Orders (last 7 calendar days) ────────────────────────────
@@ -219,27 +291,22 @@ export function Dashboard() {
 
   // ── Computed Stats ─────────────────────────────────────────────────────────
   const stats = useMemo((): StatItem[] => {
-    const todayStr = new Date().toDateString()
-    const todayOrders = ordersList.filter(o => toDate(o.createdAt).toDateString() === todayStr)
-    const todayRevenue = todayOrders.filter(o => o.status !== 'cancelled' && o.status !== 'refunded').reduce((s, o) => s + o.total, 0)
-    const totalRevenue = ordersList.filter(o => o.status !== 'cancelled' && o.status !== 'refunded').reduce((s, o) => s + o.total, 0)
-    const pendingOrders = ordersList.filter(o => o.status === 'pending' || o.status === 'accepted' || o.status === 'preparing').length
-    const activeRestaurants = restaurantsList.filter(r => r.status === 'active').length
-    const activePartners = partnersList.filter(p => p.status === 'online' || p.status === 'busy').length
-    const avgRating = restaurantsList.length > 0
-      ? (restaurantsList.reduce((s, r) => s + (r.rating || 0), 0) / restaurantsList.length).toFixed(1)
-      : '—'
+    const periodRevenue = periodOrders.reduce((s, o) => s + orderRevenue(o), 0)
+    const previousRevenue = previousOrders.reduce((s, o) => s + orderRevenue(o), 0)
+    const totalRevenue = ordersList.reduce((s, o) => s + orderRevenue(o), 0)
     const revenueLabel = totalRevenue >= 100000 ? `₹${(totalRevenue / 100000).toFixed(1)}L` : formatCurrency(totalRevenue)
+    const periodName = period === 'yearly' ? 'Yearly' : 'Monthly'
+    const allTime = { trend: 'neutral' as const, changeLabel: 'All time' }
 
     return [
-      { id: 'orders', title: "Today's Orders", value: todayOrders.length, icon: ShoppingBag, color: 'red', trend: 'up', changeLabel: '+12%' },
-      { id: 'revenue', title: "Today's Revenue", value: formatCurrency(todayRevenue), icon: DollarSign, color: 'green', trend: 'up', changeLabel: '+8%' },
-      { id: 'total-rev', title: 'Total Revenue', value: revenueLabel, icon: TrendingUp, color: 'blue', trend: 'up', changeLabel: '+15%' },
-      { id: 'customers', title: 'Total Customers', value: customersList.length, icon: Users, color: 'purple', trend: 'up', changeLabel: '+5%' },
-      { id: 'restaurants', title: 'Restaurants', value: restaurantsList.length, icon: Store, color: 'amber', trend: 'up', changeLabel: '+2%' },
-      { id: 'partners', title: 'Delivery Partners', value: partnersList.length, icon: Bike, color: 'indigo', trend: 'up', changeLabel: '+8%' },
+      { id: 'orders', title: `${periodName} Orders`, value: periodOrders.length, icon: ShoppingBag, color: 'red', ...trendOf(periodOrders.length, previousOrders.length, range.prevLabel) },
+      { id: 'revenue', title: `${periodName} Revenue`, value: formatCurrency(periodRevenue), icon: DollarSign, color: 'green', ...trendOf(periodRevenue, previousRevenue, range.prevLabel) },
+      { id: 'total-rev', title: 'Total Revenue', value: revenueLabel, icon: TrendingUp, color: 'blue', ...allTime },
+      { id: 'customers', title: 'Total Customers', value: customersList.length, icon: Users, color: 'purple', ...allTime },
+      { id: 'restaurants', title: 'Restaurants', value: restaurantsList.length, icon: Store, color: 'amber', ...allTime },
+      { id: 'partners', title: 'Delivery Partners', value: partnersList.length, icon: Bike, color: 'indigo', ...allTime },
     ]
-  }, [ordersList, restaurantsList, customersList, partnersList])
+  }, [ordersList, periodOrders, previousOrders, period, range, restaurantsList, customersList, partnersList])
 
   const topRestaurants = useMemo(() => {
     const ids = new Set(restaurantsList.map(restaurant => restaurant.id))
@@ -260,7 +327,7 @@ export function Dashboard() {
       totals.set(id, current)
     }
 
-    for (const order of ordersList) {
+    for (const order of periodOrders) {
       const amount = isCancelledOrder(order.status) ? 0 : orderAmount(order)
       const restaurantId = String(order.restaurantId || '')
       if (restaurantId && ids.has(restaurantId)) {
@@ -278,13 +345,13 @@ export function Dashboard() {
       })
       .sort((a, b) => b.orderCount - a.orderCount || b.revenue - a.revenue || a.name.localeCompare(b.name))
       .slice(0, 5)
-  }, [restaurantsList, ordersList])
+  }, [restaurantsList, periodOrders])
 
   // ── Recent Orders ──────────────────────────────────────────────────────────
   const ORDERS_PAGE_SIZE = 6
   const recentOrders = useMemo(() => {
-    return [...ordersList].sort((a, b) => toDate(b.createdAt).getTime() - toDate(a.createdAt).getTime())
-  }, [ordersList])
+    return [...periodOrders].sort((a, b) => toDate(b.createdAt).getTime() - toDate(a.createdAt).getTime())
+  }, [periodOrders])
 
   const filteredOrders = useMemo(() => {
     if (!searchQuery.trim()) return recentOrders
@@ -367,6 +434,48 @@ export function Dashboard() {
   return (
     <div className="space-y-6 pb-8">
 
+      {/* ── Period Filter ── */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+          <Calendar size={16} className="text-[#B32B2C]" /> Showing data for {range.label}
+        </p>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 bg-white border border-gray-200 p-1 rounded-xl">
+            {(['monthly', 'yearly'] as const).map(p => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => { setPeriod(p); setOrdersPage(0) }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${
+                  period === p ? 'bg-[#B32B2C] text-white shadow-sm' : 'text-gray-500 hover:text-gray-900'
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          {period === 'monthly' ? (
+            <input
+              type="month"
+              aria-label="Select month"
+              value={selectedMonth}
+              max={currentMonthValue()}
+              onChange={e => { if (e.target.value) { setSelectedMonth(e.target.value); setOrdersPage(0) } }}
+              className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
+            />
+          ) : (
+            <select
+              aria-label="Select year"
+              value={selectedYear}
+              onChange={e => { setSelectedYear(Number(e.target.value)); setOrdersPage(0) }}
+              className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
+            >
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          )}
+        </div>
+      </div>
+
       {/* ── Stats Grid ── */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {stats.map((stat, i) => {
@@ -387,7 +496,8 @@ export function Dashboard() {
               <div className="flex items-end justify-between">
                 <AnimatedCounter value={stat.value} />
                 <span className={`text-[10px] font-bold flex items-center gap-0.5 ${stat.trend === 'up' ? 'text-green-600' : stat.trend === 'down' ? 'text-red-600' : 'text-gray-400'}`}>
-                  {stat.trend === 'up' ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+                  {stat.trend === 'up' && <TrendingUp size={10} />}
+                  {stat.trend === 'down' && <TrendingDown size={10} />}
                   {stat.changeLabel}
                 </span>
               </div>
@@ -410,7 +520,7 @@ export function Dashboard() {
                   <BarChart3 size={18} className="text-[#B32B2C]" /> Revenue Analytics
                 </h3>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Last 6 months · {chartMetric === 'revenue' ? formatCurrency(chartTotal) : `${chartTotal.toLocaleString('en-IN')} orders`}
+                  {period === 'yearly' ? `Month-wise · ${range.label}` : `Day-wise · ${range.label}`} · {chartMetric === 'revenue' ? formatCurrency(chartTotal) : `${chartTotal.toLocaleString('en-IN')} orders`}
                 </p>
               </div>
               <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-xl">
@@ -432,7 +542,7 @@ export function Dashboard() {
             <div className="p-4">
               <ResponsiveContainer key={chartMetric} width="100%" height={280}>
                 {chartMetric === 'revenue' ? (
-                  <AreaChart data={monthlyChart} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                  <AreaChart data={periodChart} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                     <defs>
                       <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#B32B2C" stopOpacity={0.25} />
@@ -440,15 +550,15 @@ export function Dashboard() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={v => `₹${(v/1000).toFixed(0)}k`} />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={v => compactRevenue(Number(v))} />
                     <Tooltip content={<CustomTooltip />} />
                     <Area type="monotone" dataKey="revenue" name="Revenue" stroke="#B32B2C" strokeWidth={2.5} fill="url(#revGrad)" />
                   </AreaChart>
                 ) : (
-                  <BarChart data={monthlyChart} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                  <BarChart data={periodChart} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
                     <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} allowDecimals={false} />
                     <Tooltip content={<CustomTooltip />} />
                     <Bar dataKey="orders" name="Orders" fill="#2563eb" radius={[6, 6, 0, 0]} maxBarSize={48} />
@@ -466,7 +576,7 @@ export function Dashboard() {
                   <ShoppingBag size={18} className="text-[#B32B2C]" /> Recent Orders
                 </h3>
                 <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-bold">
-                  {ordersList.length} Total
+                  {periodOrders.length} in {period === 'yearly' ? range.label : range.label.split(' ')[0]}
                 </span>
               </div>
               <div className="relative w-64">

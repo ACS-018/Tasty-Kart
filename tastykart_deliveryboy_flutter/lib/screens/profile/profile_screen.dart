@@ -206,9 +206,7 @@ class _RatingLine extends StatelessWidget {
         }
         final label = scores.isEmpty
             ? (partner.rating > 0 ? partner.rating.toStringAsFixed(1) : 'New')
-            : (scores.reduce((a, b) => a + b) / scores.length).toStringAsFixed(
-                1,
-              );
+            : '${(scores.reduce((a, b) => a + b) / scores.length).toStringAsFixed(1)} (${scores.length})';
         return Row(
           children: [
             const Icon(Icons.star, color: Color(0xFFFFC107), size: 16),

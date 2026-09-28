@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
-import { Edit, Trash2, Plus, Loader2, AlertTriangle, Upload } from 'lucide-react'
+import { Edit, Trash2, Plus, Loader2, AlertTriangle, Upload, Eye } from 'lucide-react'
 import { DataTable } from '@/components/shared/DataTable'
 import { StatusBadge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -8,6 +8,7 @@ import { Modal, ConfirmDialog } from '@/components/ui/Modal'
 import { Input, Select } from '@/components/ui/Input'
 import { useToast } from '@/components/ui/Toast'
 import type { FoodCategory, FoodItem, Restaurant } from '@/data/dummy'
+import { formatCurrency } from '@/lib/utils'
 import {
   subscribeToCollection,
   addDocumentToFirestore,
@@ -47,6 +48,7 @@ export function FoodCategories() {
   const [showAdd, setShowAdd] = useState(false)
   const [editGroup, setEditGroup] = useState<CategoryGroup | null>(null)
   const [deleteGroup, setDeleteGroup] = useState<CategoryGroup | null>(null)
+  const [viewGroup, setViewGroup] = useState<CategoryGroup | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isCleaning, setIsCleaning] = useState(false)
   const [showCleanConfirm, setShowCleanConfirm] = useState(false)
@@ -82,14 +84,17 @@ export function FoodCategories() {
   )
   const liveIds = useMemo(() => new Set(liveRestaurants.map(restaurant => restaurant.id)), [liveRestaurants])
 
-  const itemCountFor = (categoryId: string, categoryName: string, restaurantId: string) => {
+  const itemsFor = (categoryId: string, categoryName: string, restaurantId: string) => {
     const key = nameKey(categoryName)
     return foodItems.filter(item => {
       if (item.restaurantId !== restaurantId) return false
       if (item.categoryId && item.categoryId === categoryId) return true
       return nameKey(item.categoryName || '') === key
-    }).length
+    })
   }
+
+  const itemCountFor = (categoryId: string, categoryName: string, restaurantId: string) =>
+    itemsFor(categoryId, categoryName, restaurantId).length
 
   const groups = useMemo(() => {
     const byName = new Map<string, CategoryGroup>()
@@ -321,7 +326,20 @@ export function FoodCategories() {
     {
       accessorKey: 'itemCount',
       header: 'Items',
-      cell: ({ row }) => <span className="text-sm font-medium">{row.original.itemCount}</span>,
+      cell: ({ row }) => (
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">{row.original.itemCount}</span>
+          {row.original.itemCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setViewGroup(row.original)}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-[#B32B2C] bg-red-50 hover:bg-red-100 transition-colors"
+            >
+              <Eye size={13} /> View
+            </button>
+          )}
+        </div>
+      ),
     },
     {
       accessorKey: 'status',
@@ -462,6 +480,56 @@ export function FoodCategories() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={!!viewGroup}
+        onClose={() => setViewGroup(null)}
+        title={viewGroup ? `${viewGroup.name} · ${viewGroup.itemCount} item${viewGroup.itemCount === 1 ? '' : 's'}` : ''}
+        size="md"
+      >
+        {viewGroup && (
+          <div className="space-y-4 max-h-[60vh] overflow-y-auto">
+            {viewGroup.restaurants.map(restaurant => {
+              const items = itemsFor(restaurant.categoryId, viewGroup.name, restaurant.id)
+              if (items.length === 0) return null
+              return (
+                <div key={restaurant.id}>
+                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
+                    {restaurant.name} ({items.length})
+                  </p>
+                  <div className="rounded-xl border border-gray-100 divide-y divide-gray-100">
+                    {items.map(item => {
+                      const price = Number(item.price) || 0
+                      const discounted = Number(item.discountedPrice) || 0
+                      const showDiscount = discounted > 0 && discounted < price
+                      return (
+                        <div key={item.id} className="flex items-center gap-3 px-3 py-2.5">
+                          {item.image ? (
+                            <img src={item.image} alt={item.name} className="w-10 h-10 rounded-lg object-cover bg-gray-100 shrink-0" />
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center shrink-0 text-lg">🍽️</div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-gray-900 truncate flex items-center gap-2">
+                              <span className={`w-2.5 h-2.5 rounded-sm border shrink-0 ${item.isVeg ? 'border-green-600 bg-green-500' : 'border-red-600 bg-red-500'}`} />
+                              {item.name}
+                            </p>
+                            {item.status === 'inactive' && <p className="text-xs text-gray-400">Inactive</p>}
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="text-sm font-semibold text-gray-900">{formatCurrency(showDiscount ? discounted : price)}</p>
+                            {showDiscount && <p className="text-xs text-gray-400 line-through">{formatCurrency(price)}</p>}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </Modal>
 
       <ConfirmDialog

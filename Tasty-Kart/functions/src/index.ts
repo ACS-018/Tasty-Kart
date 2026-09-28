@@ -825,11 +825,12 @@ function cashLimitRupees(partner: admin.firestore.DocumentData, settings: admin.
   return configured > 0 ? Math.round(configured) : 0
 }
 
-function excessCashRupees(partner: admin.firestore.DocumentData, settings: admin.firestore.DocumentData | undefined): number {
+/** Once cash in hand reaches the limit, the partner must pay all of it. */
+function cashDueRupees(partner: admin.firestore.DocumentData, settings: admin.firestore.DocumentData | undefined): number {
   const held = Math.round(Number(partner.cashInHand ?? 0))
   const limit = cashLimitRupees(partner, settings)
-  if (limit <= 0) return 0
-  return Math.max(0, held - limit)
+  if (limit <= 0 || held <= 0) return 0
+  return held >= limit ? held : 0
 }
 
 async function applyCashDeposit(params: {
@@ -878,7 +879,7 @@ async function applyCashDeposit(params: {
       method: 'razorpay',
       status: 'completed',
       utr: params.razorpayPaymentId,
-      remarks: 'Excess cash paid to TastyKart',
+      remarks: 'Cash in hand paid to TastyKart',
       balanceBefore: held,
       balanceAfter: nextHeld,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -888,8 +889,9 @@ async function applyCashDeposit(params: {
 }
 
 /**
- * createCashDepositOrder — partner pays cash held above the admin cash limit
- * into the same production Razorpay account used for customer orders.
+ * createCashDepositOrder — once cash in hand reaches the admin cash limit, the
+ * partner pays all of it into the same production Razorpay account used for
+ * customer orders.
  */
 export const createCashDepositOrder = onCallV2(
   { region: 'asia-south1', secrets: [RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET] },
@@ -903,10 +905,10 @@ export const createCashDepositOrder = onCallV2(
     if (uid !== partnerId && uid !== owner)
       throw new HttpsError('permission-denied', 'You can only settle your own cash.')
     const settingsSnap = await db.collection('settings').doc('admin').get()
-    const excess = excessCashRupees(partner, settingsSnap.data())
-    if (excess <= 0) throw new HttpsError('failed-precondition', 'Cash in hand is within the limit.')
+    const due = cashDueRupees(partner, settingsSnap.data())
+    if (due <= 0) throw new HttpsError('failed-precondition', 'Cash in hand has not reached the limit.')
 
-    const amountPaise = excess * 100
+    const amountPaise = due * 100
     const keyId = RAZORPAY_KEY_ID.value()
     const keySecret = RAZORPAY_KEY_SECRET.value()
     const rzp = rzpClient(keyId, keySecret)
@@ -929,7 +931,7 @@ export const createCashDepositOrder = onCallV2(
     await db.collection('cashDeposits').doc(depositId).set({
       id: depositId,
       partnerId,
-      amount: excess,
+      amount: due,
       amountPaise,
       cashInHandBefore: held,
       cashLimit: limit,
@@ -1407,5 +1409,184 @@ export const onOrderNeedsReassignment = functions.firestore
       }
     }
 
+    return null
+  })
+
+
+// ============================================================================
+// FIRESTORE TRIGGER: Order delivered → credit the daily target bonus
+// ============================================================================
+
+/** yyyy-MM-dd in India time; must match `_dayKey` in the delivery app. */
+function istDayKey(date: Date): string {
+  const ist = new Date(date.getTime() + 5.5 * 60 * 60 * 1000)
+  return ist.toISOString().slice(0, 10)
+}
+
+function toJsDate(value: unknown): Date | null {
+  if (value instanceof Timestamp) return value.toDate()
+  if (typeof value === 'string' || typeof value === 'number') {
+    const d = new Date(value)
+    return Number.isNaN(d.getTime()) ? null : d
+  }
+  return null
+}
+
+/** Same formula as `DeliveryOrder.payout` in the delivery app. */
+function partnerPayout(order: admin.firestore.DocumentData): number {
+  const deliveryFee = Number(order.deliveryFee) || 0
+  const total = Number(order.total) || 0
+  const tip = Number(order.tip) || 0
+  return (deliveryFee > 0 ? deliveryFee : total) + tip
+}
+
+/**
+ * When an order becomes delivered, totals the partner's delivered payout for
+ * that (IST) day and credits `settings/admin.deliveryPartner.dailyTargetBonus`
+ * to their pocket once the day's earnings reach `dailyTarget`.
+ * The `transactions/bonus_{partnerId}_{day}` doc is the once-per-day guard,
+ * shared with the app's own credit path.
+ */
+export const onOrderDeliveredDailyBonus = functions.firestore
+  .document('orders/{orderId}')
+  .onUpdate(async (change) => {
+    const before = change.before.data()
+    const after = change.after.data()
+    const status = String(after.status ?? '').toLowerCase()
+    if (status !== 'delivered' || String(before.status ?? '').toLowerCase() === 'delivered') {
+      return null
+    }
+    const partnerId: string = after.deliveryPartnerId ?? ''
+    if (!partnerId) return null
+
+    const settingsSnap = await db.collection('settings').doc('admin').get()
+    const dp = settingsSnap.data()?.deliveryPartner ?? {}
+    const target = Number(dp.dailyTarget) || 0
+    const bonus = Number(dp.dailyTargetBonus) || 0
+    if (target <= 0 || bonus <= 0) return null
+
+    const day = istDayKey(toJsDate(after.deliveredAt) ?? new Date())
+    const ordersSnap = await db
+      .collection('orders')
+      .where('deliveryPartnerId', '==', partnerId)
+      .get()
+    let earned = 0
+    for (const doc of ordersSnap.docs) {
+      const o = doc.data()
+      if (String(o.status ?? '').toLowerCase() !== 'delivered') continue
+      const when = doc.id === change.after.id
+        ? (toJsDate(o.deliveredAt) ?? new Date())
+        : (toJsDate(o.deliveredAt) ?? toJsDate(o.createdAt))
+      if (!when || istDayKey(when) !== day) continue
+      earned += partnerPayout(o)
+    }
+    if (earned < target) return null
+
+    const partnerRef = db.collection('deliveryPartners').doc(partnerId)
+    const txRef = db.collection('transactions').doc(`bonus_${partnerId}_${day}`)
+    const credited = await db.runTransaction(async (tx) => {
+      const [partnerSnap, existing] = await Promise.all([tx.get(partnerRef), tx.get(txRef)])
+      if (!partnerSnap.exists || existing.exists) return false
+      const partner = partnerSnap.data() ?? {}
+      const balanceBefore = Number(partner.pocketBalance) || 0
+      const storedDay = String(partner.dailyTargetBonusDate ?? '')
+      tx.set(partnerRef, {
+        pocketBalance: admin.firestore.FieldValue.increment(bonus),
+        ...(storedDay < day ? { dailyTargetBonusDate: day } : {}),
+        updatedAt: Timestamp.now(),
+      }, { merge: true })
+      tx.set(txRef, {
+        id: txRef.id,
+        partnerId,
+        partnerName: partner.name ?? after.deliveryPartnerName ?? '',
+        type: 'bonus',
+        title: 'Daily target reward',
+        amount: bonus,
+        method: 'wallet',
+        status: 'completed',
+        orderId: change.after.id,
+        orderNumber: after.orderNumber ?? '',
+        balanceBefore,
+        balanceAfter: balanceBefore + bonus,
+        remarks: `Today's target of ₹${target} completed (₹${earned} earned)`,
+        createdAt: Timestamp.now(),
+        processedAt: Timestamp.now(),
+      })
+      return true
+    })
+    if (credited) {
+      logger.info(`[DailyBonus] Credited ₹${bonus} to ${partnerId} for ${day} (earned ₹${earned})`)
+    }
+    return null
+  })
+
+
+// ============================================================================
+// FIRESTORE TRIGGER: Admin replied on a delivery-partner support ticket → FCM
+// ============================================================================
+
+/** The app refreshes `partnerViewingAt` every minute while the chat is open. */
+const SUPPORT_VIEWING_FRESH_MS = 2 * 60 * 1000
+
+/**
+ * Pushes the admin's reply to the partner's devices, unless the partner has
+ * that ticket's chat open right now (they already see the message live).
+ */
+export const onSupportTicketReply = functions.firestore
+  .document('supportTickets/{ticketId}/messages/{messageId}')
+  .onCreate(async (snap, context) => {
+    const msg = snap.data() ?? {}
+    if (msg.senderType !== 'admin') return null
+
+    const ticketId: string = context.params.ticketId
+    const ticketSnap = await db.collection('supportTickets').doc(ticketId).get()
+    if (!ticketSnap.exists) return null
+    const ticket = ticketSnap.data() ?? {}
+
+    const viewingAt = ticket.partnerViewingAt instanceof Timestamp
+      ? ticket.partnerViewingAt.toMillis()
+      : 0
+    if (ticket.partnerViewing === true && Date.now() - viewingAt < SUPPORT_VIEWING_FRESH_MS) {
+      logger.info(`[Support] Partner is viewing ticket ${ticketId}; skipping push`)
+      return null
+    }
+
+    const partnerId: string = ticket.partnerId ?? ''
+    if (!partnerId) return null
+    const partnerSnap = await db.collection('deliveryPartners').doc(partnerId).get()
+    const partner = partnerSnap.data() ?? {}
+    if (partner.notificationsEnabled === false) return null
+    const tokens: string[] = Array.isArray(partner.fcmTokens)
+      ? partner.fcmTokens.filter((t: unknown) => typeof t === 'string' && t.length > 0)
+      : []
+    if (tokens.length === 0) return null
+
+    const text = String(msg.message ?? '').trim()
+    const body = text.length > 140 ? `${text.slice(0, 137)}...` : text
+    try {
+      const response = await admin.messaging().sendEachForMulticast({
+        tokens,
+        notification: {
+          title: `Support replied · ${ticket.subject ?? ticket.category ?? 'Your ticket'}`,
+          body: body || 'You have a new reply from TastyKart support.',
+        },
+        data: {
+          type: 'support_reply',
+          action: 'open_support_ticket',
+          ticketId,
+        },
+        android: {
+          priority: 'high',
+          notification: { channelId: 'general', sound: 'default', tag: `support_${ticketId}` },
+        },
+        apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+      })
+      logger.info(`[Support] Reply push for ticket ${ticketId}`, {
+        successCount: response.successCount,
+        failureCount: response.failureCount,
+      })
+    } catch (e) {
+      logger.error(`[Support] Failed to push reply for ticket ${ticketId}`, e)
+    }
     return null
   })

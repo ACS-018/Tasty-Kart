@@ -3,13 +3,15 @@ import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../main.dart';
+import '../screens/profile/support_ticket_chat_screen.dart';
 import '../utils/app_navigation.dart';
 import 'firestore_paths.dart';
+import 'support_ticket_service.dart';
 
 /// FCM service for handling push notifications
 class FCMService {
@@ -277,24 +279,61 @@ class FCMService {
     final action = data['action'] ?? '';
     final orderId = data['orderId'] ?? '';
 
-    _navigateBasedOnAction(action, orderId);
+    _navigateBasedOnAction(action, orderId, ticketId: data['ticketId'] ?? '');
   }
 
   /// Handle notification tap from local notification payload
   static void handleNotificationTap(String payload) {
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
-      final action = data['action'] ?? '';
-      final orderId = data['orderId'] ?? '';
+      final action = '${data['action'] ?? ''}';
+      final orderId = '${data['orderId'] ?? ''}';
 
-      _navigateBasedOnAction(action, orderId);
+      _navigateBasedOnAction(
+        action,
+        orderId,
+        ticketId: '${data['ticketId'] ?? ''}',
+      );
     } catch (e) {
       debugPrint('Error handling notification tap: $e');
     }
   }
 
+  static Future<void> _openSupportTicket(String ticketId) async {
+    if (ticketId.isEmpty) return;
+    try {
+      final ticket = await SupportTicketService.getTicket(ticketId);
+      if (ticket == null) return;
+      var navigator = AppNavigation.rootNavigatorKey.currentState;
+      for (var i = 0; navigator == null && i < 10; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        navigator = AppNavigation.rootNavigatorKey.currentState;
+      }
+      if (navigator == null) return;
+      navigator.push(
+        MaterialPageRoute<void>(
+          builder: (_) => SupportTicketChatScreen(
+            ticket: ticket,
+            partnerId: ticket.partnerId,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[FCM] open support ticket error: $e');
+    }
+  }
+
   /// Navigate based on notification action
-  static void _navigateBasedOnAction(String action, String orderId) {
+  static void _navigateBasedOnAction(
+    String action,
+    String orderId, {
+    String ticketId = '',
+  }) {
+    if (action == 'open_support_ticket') {
+      _openSupportTicket(ticketId);
+      return;
+    }
+
     final context = AppNavigation.rootNavigatorKey.currentContext;
     if (context == null) return;
 

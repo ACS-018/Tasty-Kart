@@ -112,7 +112,7 @@ class _SelectPaymentScreenState extends State<SelectPaymentScreen> {
         AppFeedback.showSuccess(
           context,
           cashLimitReached
-              ? 'Delivery completed. Cash limit reached, so you are offline until the extra cash is paid.'
+              ? 'Delivery completed. Cash limit reached, so you are offline until you pay your cash in hand to TastyKart.'
               : 'Delivery completed',
         );
         Navigator.of(context).pushAndRemoveUntil(

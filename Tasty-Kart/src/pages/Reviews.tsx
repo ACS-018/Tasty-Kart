@@ -52,6 +52,17 @@ function textOf(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function timeOf(value: unknown): number {
+  if (!value) return 0
+  if (typeof value === 'number') return value
+  if (typeof value === 'string') return Date.parse(value) || 0
+  if (value instanceof Date) return value.getTime()
+  const ts = value as { toMillis?: () => number; seconds?: number }
+  if (typeof ts.toMillis === 'function') return ts.toMillis()
+  if (typeof ts.seconds === 'number') return ts.seconds * 1000
+  return 0
+}
+
 function isPlaceholderName(name: string) {
   const value = name.trim().toLowerCase()
   return (
@@ -85,7 +96,11 @@ export function Reviews() {
 
   useEffect(() => {
     const unsub = subscribeToCollection<Review>('reviews', (data) => {
-      setReviewsList(data.filter(r => textOf(r.type).toLowerCase() !== 'food'))
+      setReviewsList(
+        data
+          .filter(r => textOf(r.type).toLowerCase() !== 'food')
+          .sort((a, b) => timeOf(b.createdAt) - timeOf(a.createdAt)),
+      )
       setLoading(false)
     })
     const unsubCustomers = subscribeToCollection<NamedDoc>('customers', setCustomers)

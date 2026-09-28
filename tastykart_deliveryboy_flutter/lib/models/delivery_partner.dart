@@ -199,11 +199,12 @@ class DeliveryPartner {
     return adminDefault > 0 ? adminDefault : 0;
   }
 
-  /// Rupees above the cash limit. This is what must be paid before going online.
+  /// Once cash in hand reaches the limit, all of it must be paid to TastyKart
+  /// before the partner can go online again.
   int cashDue(int limit) {
     if (limit <= 0) return 0;
-    final over = cashInHandRupees - limit;
-    return over > 0 ? over : 0;
+    final held = cashInHandRupees;
+    return held > 0 && held >= limit ? held : 0;
   }
 
   bool cashLimitExceeded(int limit) => cashDue(limit) > 0;

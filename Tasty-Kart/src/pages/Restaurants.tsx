@@ -41,10 +41,13 @@ function isCancelledOrder(status: unknown) {
   return value === 'cancelled' || value === 'canceled' || value === 'refunded' || value.includes('cancel')
 }
 
-/** Amount collected on an order. Falls back to line items when `total` was never stored. */
+/** Restaurant revenue for an order: amount collected minus delivery fee and tip. Falls back to line items when `total` was never stored. */
 function orderAmount(order: Order) {
+  const record = order as Order & Record<string, unknown>
+  const deliveryFee = Number(record.deliveryFee) || 0
+  const tip = Number(record.tip) || 0
   const total = Number(order.total) || 0
-  if (total > 0) return total
+  if (total > 0) return Math.max(0, total - deliveryFee - tip)
   const items = Array.isArray(order.items) ? order.items : []
   const fromItems = items.reduce((sum, item) => {
     const price = Number(item?.price) || 0
@@ -52,13 +55,10 @@ function orderAmount(order: Order) {
     return sum + price * (qty > 0 ? qty : 1)
   }, 0)
   if (fromItems > 0) return fromItems
-  const record = order as Order & Record<string, unknown>
   const computed =
     (Number(record.subtotal) || 0) +
     (Number(record.tax) || 0) +
-    (Number(record.deliveryFee) || 0) +
-    (Number(record.platformFee) || 0) +
-    (Number(record.tip) || 0) -
+    (Number(record.platformFee) || 0) -
     (Number(record.discount) || 0)
   return computed > 0 ? computed : 0
 }
@@ -337,7 +337,7 @@ export function Restaurants() {
         deliveryTime: formData.deliveryTime,
         minOrder: Number(formData.minOrder) || 150,
         status: formData.status,
-        rating: 4.5,
+        rating: 0,
         totalOrders: 0,
         revenue: 0,
         logo: logoUrl,
@@ -517,28 +517,6 @@ export function Restaurants() {
       },
     },
     {
-      accessorKey: 'rating',
-      header: 'Rating',
-      cell: ({ row }) => {
-        const r = row.original
-        // Prefer averageRating (live, user-driven) — falls back to the static
-        // seed `rating` field. Both are kept in sync on every review write.
-        const displayRating = r.averageRating ?? r.rating
-        const reviewCount = r.totalReviews ?? 0
-        return (
-          <div className="flex items-center gap-1 text-sm">
-            <Star size={13} className="text-amber-400 fill-amber-400" />
-            <span className="font-medium">
-              {displayRating > 0 ? displayRating.toFixed(1) : 'New'}
-            </span>
-            {reviewCount > 0 && (
-              <span className="text-xs text-gray-400">({reviewCount})</span>
-            )}
-          </div>
-        )
-      },
-    },
-    {
       accessorKey: 'totalOrders',
       header: 'Orders',
       cell: ({ row }) => <span className="text-sm">{row.original.totalOrders.toLocaleString()}</span>,
@@ -684,9 +662,7 @@ export function Restaurants() {
                 <div className="flex items-center justify-between mt-3 text-xs text-gray-500">
                   <span className="flex items-center gap-1">
                     <Star size={11} className="text-amber-400 fill-amber-400" />
-                    {(r.averageRating ?? r.rating) > 0
-                      ? (r.averageRating ?? r.rating).toFixed(1)
-                      : 'New'}
+                    {((r.averageRating ?? r.rating) || 0).toFixed(1)}
                     {(r.totalReviews ?? 0) > 0 && (
                       <span className="text-gray-400">({r.totalReviews})</span>
                     )}
@@ -717,9 +693,7 @@ export function Restaurants() {
               <div className="flex items-center justify-center gap-1 mt-1">
                 <Star size={14} className="text-amber-400 fill-amber-400" />
                 <span className="text-sm font-medium">
-                  {(selected.averageRating ?? selected.rating) > 0
-                    ? (selected.averageRating ?? selected.rating).toFixed(1)
-                    : 'New'}
+                  {((selected.averageRating ?? selected.rating) || 0).toFixed(1)}
                 </span>
                 {(selected.totalReviews ?? 0) > 0 && (
                   <span className="text-xs text-gray-400">
@@ -771,6 +745,31 @@ export function Restaurants() {
                 </div>
               </div>
             ))}
+
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Categories</h4>
+              {(selected.categories || []).length === 0 ? (
+                <p className="text-sm text-gray-400">No categories assigned</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {(selected.categories || []).map(value => {
+                    const token = String(value)
+                    const category = restaurantCategories.find(
+                      cat => cat.id === token || String(cat.name || '').toLowerCase() === token.toLowerCase(),
+                    )
+                    return (
+                      <span
+                        key={token}
+                        className="inline-flex items-center gap-1 px-3 py-1 bg-white border border-gray-200 rounded-full text-xs font-medium text-gray-700"
+                      >
+                        {category?.icon && <span>{category.icon}</span>}
+                        {category?.name || token}
+                      </span>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
 
             <div className="flex flex-wrap gap-2">
               <Button

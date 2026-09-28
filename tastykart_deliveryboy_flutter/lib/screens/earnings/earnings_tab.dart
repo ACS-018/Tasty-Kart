@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../constants/color_constants.dart';
 import '../../models/delivery_order.dart';
 import '../../models/delivery_partner.dart';
+import '../../models/partner_transaction.dart';
 import '../../services/delivery_partner_service.dart';
 import '../../services/order_service.dart';
 import '../../services/settings_service.dart';
@@ -17,6 +18,156 @@ import 'deduction_statement_screen.dart';
 import 'payout_screen.dart';
 import 'tip_deduction_screen.dart';
 import 'wallet_statement_screen.dart';
+
+/// Splits the partner's balances into what they own and what belongs to TastyKart.
+class _MoneySplitCard extends StatelessWidget {
+  const _MoneySplitCard({
+    required this.pocket,
+    required this.tips,
+    required this.cashInHand,
+  });
+
+  final num pocket;
+  final num tips;
+  final num cashInHand;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Where your money is',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: AppColors.textDark,
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'YOUR MONEY',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.6,
+              color: Color(0xFF2E7D32),
+            ),
+          ),
+          const SizedBox(height: 6),
+          _MoneyRow(
+            color: const Color(0xFF2E7D32),
+            title: 'Pocket Balance',
+            subtitle: 'Your delivery pay and bonuses. Withdraw via UPI.',
+            amount: pocket,
+          ),
+          const SizedBox(height: 8),
+          _MoneyRow(
+            color: const Color(0xFF6A1B9A),
+            title: 'Tip Balance',
+            subtitle: 'Tips given by customers.',
+            amount: tips,
+          ),
+          const Divider(height: 24),
+          const Text(
+            'TASTYKART\'S MONEY',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.6,
+              color: Color(0xFFE65100),
+            ),
+          ),
+          const SizedBox(height: 6),
+          _MoneyRow(
+            color: const Color(0xFFE65100),
+            title: 'Cash in Hand',
+            subtitle: 'Cash you collected from customers (COD). Not your earnings — pay it to TastyKart.',
+            amount: cashInHand,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MoneyRow extends StatelessWidget {
+  const _MoneyRow({
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.amount,
+  });
+
+  final Color color;
+  final String title;
+  final String subtitle;
+  final num amount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 4,
+          height: 36,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: AppColors.textDark,
+                ),
+              ),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.textMedium,
+                  height: 1.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          rupee(amount),
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 15,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 class _CashInHandCard extends StatelessWidget {
   const _CashInHandCard({
@@ -70,7 +221,7 @@ class _CashInHandCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'COD Cash in Hand',
+                      'Cash to Pay TastyKart',
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 14,
@@ -78,7 +229,7 @@ class _CashInHandCard extends StatelessWidget {
                       ),
                     ),
                     const Text(
-                      'Cash collected from customers — must be submitted to TastyKart',
+                      'Cash you collected from customers (COD). This is TastyKart\'s money, not your earnings.',
                       style: TextStyle(
                         fontSize: 11,
                         color: AppColors.textMedium,
@@ -96,7 +247,7 @@ class _CashInHandCard extends StatelessWidget {
             children: [
               Expanded(
                 child: _AmountBox(
-                  label: 'Holding',
+                  label: 'Cash with you',
                   amount: rupee(held),
                   labelColor: AppColors.textMedium,
                   amountColor: AppColors.textDark,
@@ -105,7 +256,7 @@ class _CashInHandCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: _AmountBox(
-                  label: 'Allowed Limit',
+                  label: 'Cash limit',
                   amount: rupee(limit),
                   labelColor: AppColors.textMedium,
                   amountColor: const Color(0xFF1565C0),
@@ -115,7 +266,7 @@ class _CashInHandCard extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: _AmountBox(
-                    label: 'Submit to TastyKart',
+                    label: 'Pay now',
                     amount: rupee(due),
                     labelColor: const Color(0xFFE65100),
                     amountColor: const Color(0xFFE65100),
@@ -125,6 +276,17 @@ class _CashInHandCard extends StatelessWidget {
               ],
             ],
           ),
+          if (!isOver && limit > 0) ...[
+            const SizedBox(height: 10),
+            Text(
+              'When this reaches ${rupee(limit)}, you go offline until you pay it all to TastyKart.',
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.textMedium,
+                height: 1.4,
+              ),
+            ),
+          ],
           if (isOver) ...[
             const SizedBox(height: 12),
             Container(
@@ -139,8 +301,8 @@ class _CashInHandCard extends StatelessWidget {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'You are holding ${rupee(due)} more than the limit. '
-                      'Submit this amount to go back online.',
+                      'Cash limit reached. You are offline and will not get orders '
+                      'until you pay ${rupee(due)} to TastyKart.',
                       style: const TextStyle(
                         fontSize: 11,
                         color: Color(0xFFBF360C),
@@ -157,7 +319,7 @@ class _CashInHandCard extends StatelessWidget {
               child: ElevatedButton.icon(
                 onPressed: onPay,
                 icon: const Icon(Icons.upload_rounded, size: 18),
-                label: Text('Submit ${rupee(due)} to TastyKart'),
+                label: Text('Pay ${rupee(due)} to TastyKart'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFE65100),
                   foregroundColor: AppColors.white,
@@ -278,19 +440,6 @@ class EarningsTab extends StatelessWidget {
                     final orders = orderSnap.data ?? const <DeliveryOrder>[];
                     final weekEarn = _weekEarnings(orders);
 
-                    final today = OrderService.deliveredToday(orders);
-                    final todayTrips = today.length;
-                    final todayEarnings = today.fold<int>(
-                      0,
-                      (s, o) => s + o.payout,
-                    );
-
-                    // Incentive is weekly-based: count this week's trips
-                    final weekTrips = OrderService.deliveredThisWeek(
-                      orders,
-                    ).length;
-                    final incentiveEarned = dp.incentiveFor(weekTrips);
-
                     return ListView(
                       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                       children: [
@@ -324,7 +473,7 @@ class EarningsTab extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         const Text(
-                          'Your delivery earnings credited to your Pocket Balance',
+                          'Delivery pay for this week\'s trips. It is added to your Pocket Balance.',
                           style: TextStyle(
                             fontSize: 11,
                             color: AppColors.textMedium,
@@ -332,103 +481,18 @@ class EarningsTab extends StatelessWidget {
                         ),
                         const SizedBox(height: 16),
 
+                        _MoneySplitCard(
+                          pocket: partner.displayPocket,
+                          tips: partner.tipBalance,
+                          cashInHand: partner.cashInHandRupees,
+                        ),
+                        const SizedBox(height: 16),
+
                         // ── Today's stats ────────────────────────────
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: AppColors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.04),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Today',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 13,
-                                  color: AppColors.textMedium,
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              Row(
-                                children: [
-                                  _StatChip(
-                                    label: 'Trips',
-                                    value: '$todayTrips',
-                                    icon: Icons.delivery_dining,
-                                    highlight: todayTrips > 0,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  _StatChip(
-                                    label: 'Earned',
-                                    value: rupee(todayEarnings),
-                                    icon: Icons.currency_rupee,
-                                    highlight: todayEarnings > 0,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  _StatChip(
-                                    label: 'Incentive',
-                                    value: incentiveEarned > 0
-                                        ? rupee(incentiveEarned)
-                                        : '—',
-                                    icon: Icons.star_rounded,
-                                    highlight: incentiveEarned > 0,
-                                  ),
-                                ],
-                              ),
-                              if (incentiveEarned > 0) ...[
-                                const SizedBox(height: 10),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primary.withValues(
-                                      alpha: 0.08,
-                                    ),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(
-                                        Icons.emoji_events,
-                                        color: Color(0xFFFFC107),
-                                        size: 16,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        'Weekly incentive: ${rupee(incentiveEarned)}',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                          color: AppColors.primary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ] else if (dp.incentiveSlots.isNotEmpty) ...[
-                                const SizedBox(height: 10),
-                                Text(
-                                  _nextTierLabel(weekTrips, dp.incentiveSlots),
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: AppColors.textMedium,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
+                        _PerformanceCard(
+                          partnerId: partner.id,
+                          orders: orders,
+                          settings: dp,
                         ),
                         const SizedBox(height: 16),
 
@@ -464,7 +528,7 @@ class EarningsTab extends StatelessWidget {
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Text(
-                                          'Your Pocket Balance',
+                                          'Pocket Balance (Your Earnings)',
                                           style: TextStyle(
                                             fontWeight: FontWeight.w700,
                                             fontSize: 14,
@@ -472,7 +536,7 @@ class EarningsTab extends StatelessWidget {
                                           ),
                                         ),
                                         Text(
-                                          'YOUR money - withdraw anytime via UPI',
+                                          'Your money — withdraw anytime via UPI',
                                           style: TextStyle(
                                             fontSize: 10,
                                             color: AppColors.textMedium,
@@ -718,16 +782,6 @@ class EarningsTab extends StatelessWidget {
           return !o.createdAt!.isBefore(start);
         })
         .fold<int>(0, (sum, o) => sum + o.payout);
-  }
-
-  String _nextTierLabel(int trips, List<IncentiveSlot> slots) {
-    for (final slot in slots) {
-      if (trips < slot.trips) {
-        final diff = slot.trips - trips;
-        return '$diff more trip${diff == 1 ? '' : 's'} to earn ${rupee(slot.amount)} bonus';
-      }
-    }
-    return '';
   }
 
   Widget _gridTile({
@@ -1269,6 +1323,281 @@ class _EditUpiSheetState extends State<_EditUpiSheet> {
 }
 
 // ── Small stat chip ──────────────────────────────────────────────────────────
+
+enum _StatsPeriod { today, week, month, lifetime }
+
+/// Trips, delivery pay and incentives for a selectable period.
+class _PerformanceCard extends StatefulWidget {
+  const _PerformanceCard({
+    required this.partnerId,
+    required this.orders,
+    required this.settings,
+  });
+
+  final String partnerId;
+  final List<DeliveryOrder> orders;
+  final DeliveryPartnerSettings settings;
+
+  @override
+  State<_PerformanceCard> createState() => _PerformanceCardState();
+}
+
+class _PerformanceCardState extends State<_PerformanceCard> {
+  _StatsPeriod _period = _StatsPeriod.today;
+  late final Stream<List<PartnerTransaction>> _bonuses =
+      TransactionService.watchForPartner(widget.partnerId, limit: 200).map(
+        (list) => list.where((t) => t.type == 'bonus').toList(),
+      );
+
+  static const _labels = {
+    _StatsPeriod.today: 'Today',
+    _StatsPeriod.week: 'Week',
+    _StatsPeriod.month: 'Month',
+    _StatsPeriod.lifetime: 'Lifetime',
+  };
+
+  static DateTime? _timeOf(DeliveryOrder o) => o.deliveredAt ?? o.createdAt;
+
+  DateTime? _startFor(_StatsPeriod period) {
+    final now = DateTime.now();
+    switch (period) {
+      case _StatsPeriod.today:
+        return startOfDay(now);
+      case _StatsPeriod.week:
+        return startOfWeek(now);
+      case _StatsPeriod.month:
+        return startOfMonth(now);
+      case _StatsPeriod.lifetime:
+        return null;
+    }
+  }
+
+  String _nextTierLabel(int trips, List<IncentiveSlot> slots) {
+    for (final slot in slots) {
+      if (trips < slot.trips) {
+        final diff = slot.trips - trips;
+        return '$diff more trip${diff == 1 ? '' : 's'} this week to earn ${rupee(slot.amount)} bonus';
+      }
+    }
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dp = widget.settings;
+    final delivered = widget.orders
+        .where((o) => o.isDelivered && _timeOf(o) != null)
+        .toList();
+    final start = _startFor(_period);
+    final inPeriod = start == null
+        ? delivered
+        : delivered.where((o) => !_timeOf(o)!.isBefore(start)).toList();
+    final trips = inPeriod.length;
+    final earned = inPeriod.fold<int>(0, (s, o) => s + o.payout);
+
+    // Incentives are paid per Mon–Sun week on that week's trip count.
+    final tripsPerWeek = <DateTime, int>{};
+    for (final o in delivered) {
+      final week = startOfWeek(_timeOf(o)!);
+      tripsPerWeek[week] = (tripsPerWeek[week] ?? 0) + 1;
+    }
+    final thisWeekTrips = tripsPerWeek[startOfWeek(DateTime.now())] ?? 0;
+    final weekly = _period == _StatsPeriod.today || _period == _StatsPeriod.week;
+    final incentive = weekly
+        ? dp.incentiveFor(thisWeekTrips)
+        : tripsPerWeek.entries
+              .where(
+                (e) =>
+                    start == null ||
+                    e.key.add(const Duration(days: 7)).isAfter(start),
+              )
+              .fold<int>(0, (s, e) => s + dp.incentiveFor(e.value));
+
+    final nextTier = weekly && dp.incentiveSlots.isNotEmpty
+        ? _nextTierLabel(thisWeekTrips, dp.incentiveSlots)
+        : '';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Your Performance',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              color: AppColors.textMedium,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: _StatsPeriod.values.map((p) {
+                final selected = p == _period;
+                return Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      if (selected) return;
+                      AppFeedback.selection();
+                      setState(() => _period = p);
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(vertical: 7),
+                      decoration: BoxDecoration(
+                        color: selected ? AppColors.primary : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        _labels[p]!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: selected
+                              ? AppColors.white
+                              : AppColors.textMedium,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _StatChip(
+                label: 'Trips',
+                value: '$trips',
+                icon: Icons.delivery_dining,
+                highlight: trips > 0,
+              ),
+              const SizedBox(width: 8),
+              _StatChip(
+                label: 'Earned',
+                value: rupee(earned),
+                icon: Icons.currency_rupee,
+                highlight: earned > 0,
+              ),
+              const SizedBox(width: 8),
+              _StatChip(
+                label: _period == _StatsPeriod.today
+                    ? 'Week Incentive'
+                    : 'Incentive',
+                value: incentive > 0 ? rupee(incentive) : '—',
+                icon: Icons.star_rounded,
+                highlight: incentive > 0,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            trips > 0
+                ? 'Avg ${rupee((earned / trips).round())} per trip · Earned = delivery fee + tips'
+                : 'No deliveries ${_period == _StatsPeriod.lifetime ? 'yet' : 'in this period'}',
+            style: const TextStyle(fontSize: 11, color: AppColors.textMedium),
+          ),
+          StreamBuilder<List<PartnerTransaction>>(
+            stream: _bonuses,
+            builder: (context, snap) {
+              final paid = (snap.data ?? const <PartnerTransaction>[])
+                  .where(
+                    (t) =>
+                        start == null ||
+                        (t.createdAt != null && !t.createdAt!.isBefore(start)),
+                  )
+                  .toList();
+              final total = paid.fold<int>(0, (s, t) => s + t.amount.abs());
+              if (total <= 0) return const SizedBox.shrink();
+              return Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE8F5E9),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.card_giftcard_rounded,
+                      size: 16,
+                      color: Color(0xFF2E7D32),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _period == _StatsPeriod.today
+                            ? "Today's target bonus added to Pocket Balance"
+                            : 'Daily target bonus · ${paid.length} day${paid.length == 1 ? '' : 's'} · added to Pocket Balance',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF1B5E20),
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '+${rupee(total)}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF2E7D32),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          if (nextTier.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(
+                  Icons.emoji_events,
+                  color: Color(0xFFFFC107),
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    nextTier,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
 
 class _StatChip extends StatelessWidget {
   const _StatChip({

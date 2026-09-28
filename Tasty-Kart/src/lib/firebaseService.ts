@@ -1093,6 +1093,61 @@ export async function reconcilePartnerStatusAfterOrderEnd(
   }
 }
 
+/**
+ * Runs `reconcilePartnerStatusAfterOrderEnd` for every partner that looks stuck
+ * (status BUSY or a leftover `currentOrder`) and returns how many were reset.
+ */
+export async function reconcileAllStuckPartners(): Promise<{ checked: number; reset: number }> {
+  const snap = await getDocs(collection(db, 'deliveryPartners'))
+  const stuck = snap.docs.filter(d => {
+    const data = d.data() as Record<string, any>
+    const status = String(data.status || '').toLowerCase().trim()
+    return status === 'busy' || String(data.currentOrder || '').length > 0
+  })
+  const results = await Promise.all(stuck.map(d => reconcilePartnerStatusAfterOrderEnd(d.id)))
+  return { checked: stuck.length, reset: results.filter(r => r.reset).length }
+}
+
+/**
+ * Admin action: sets a partner back to ONLINE and clears `currentOrder`, unless
+ * they are blocked, offline, or still on a live order.
+ */
+export async function forceResetPartnerStatus(partnerId: string): Promise<{
+  success: boolean
+  skipped: boolean
+  toStatus?: string
+  error?: string
+}> {
+  if (!partnerId) return { success: false, skipped: true, error: 'Missing partner ID' }
+  try {
+    const partnerSnap = await getDocFromServer(doc(db, 'deliveryPartners', partnerId))
+    if (!partnerSnap.exists()) return { success: false, skipped: true, error: 'Partner not found' }
+    const status = String(partnerSnap.data()?.status || 'offline').toLowerCase().trim()
+    if (status === 'blocked' || status === 'offline') {
+      return { success: true, skipped: true, toStatus: status }
+    }
+
+    const activeOrder = await getActiveOrderForPartner(partnerId)
+    if (activeOrder) {
+      return {
+        success: false,
+        skipped: true,
+        toStatus: 'busy',
+        error: `Partner is still on active order ${activeOrder.id}`,
+      }
+    }
+
+    await updateDoc(doc(db, 'deliveryPartners', partnerId), {
+      status: 'online',
+      currentOrder: deleteField(),
+      updatedAt: serverTimestamp(),
+    })
+    return { success: true, skipped: false, toStatus: 'online' }
+  } catch (err: any) {
+    return { success: false, skipped: false, error: err?.message || String(err) }
+  }
+}
+
 // Local lazy shim so we can call FieldValue.delete() without a top-level import change.
 import * as firebaseFirestore from 'firebase/firestore'
 

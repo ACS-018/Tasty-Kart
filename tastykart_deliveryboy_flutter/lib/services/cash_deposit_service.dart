@@ -21,7 +21,7 @@ class CashDepositResult {
   bool get isFullyVerified => success && verified;
 }
 
-/// Pays excess COD into the production Razorpay account.
+/// Pays the partner's COD cash in hand into the production Razorpay account.
 /// Key secret stays in Cloud Functions.
 class CashDepositService {
   CashDepositService() {
@@ -39,7 +39,7 @@ class CashDepositService {
   Completer<CashDepositResult>? _pending;
   String? _depositId;
 
-  Future<CashDepositResult> payExcess({
+  Future<CashDepositResult> payCashInHand({
     required String partnerId,
     String? name,
     String? phone,

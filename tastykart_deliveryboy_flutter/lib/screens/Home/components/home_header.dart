@@ -45,7 +45,7 @@ class _HomeHeaderState extends State<HomeHeader> {
           if (mounted) {
             AppFeedback.showError(
               context,
-              'Cash limit reached. Pay the extra cash to go online.',
+              'Cash limit reached. Pay your cash in hand to TastyKart to go online.',
             );
             await AppNavigation.push(
               context,
@@ -80,7 +80,7 @@ class _HomeHeaderState extends State<HomeHeader> {
           if (mounted) {
             AppFeedback.showError(
               context,
-              'Cash limit reached. Pay the extra cash to go online.',
+              'Cash limit reached. Pay your cash in hand to TastyKart to go online.',
             );
             await AppNavigation.push(
               context,

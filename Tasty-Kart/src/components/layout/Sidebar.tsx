@@ -1,6 +1,8 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import { collection, onSnapshot, query, where } from 'firebase/firestore'
+import { db } from '@/lib/firebase'
 import { cn } from '@/lib/utils'
 import { useSidebar } from '@/context/SidebarContext'
 import { useAuth } from '@/context/AuthContext'
@@ -45,6 +47,7 @@ const navItems = [
       { path: '/delivery-partners', label: 'Delivery Partners', icon: Bike, description: 'Fleet management', badge: null },
       { path: '/delivery-map', label: 'Delivery Map', icon: Map, description: 'Real-time partner tracking', badge: null },
       { path: '/surge-requests', label: 'Surge Requests', icon: Zap, description: 'City surge from partners', badge: null },
+      { path: '/support', label: 'Delivery Support', icon: MessageSquare, description: 'Partner order & payment tickets', badge: null },
     ],
   },
   {
@@ -55,7 +58,6 @@ const navItems = [
       { path: '/payments', label: 'Payments', icon: CreditCard, description: 'Transaction history', badge: null },
       { path: '/reviews', label: 'Reviews', icon: Star, description: 'Customer feedback', badge: null },
       { path: '/notifications', label: 'Notifications', icon: Bell, description: 'System alerts', badge: null },
-      { path: '/support', label: 'Support', icon: MessageSquare, description: 'Partner support tickets', badge: null },
     ],
   },
   {
@@ -162,7 +164,7 @@ function NavItem({ path, label, icon: Icon, description, badge, collapsed, onCli
               </span>
             )}
           </div>
-          <p className={cn('text-[10px] truncate mt-0.5', active ? 'text-red-200' : 'text-white/75')}>
+          <p className={cn('text-[10px] truncate mt-0.5', active ? 'text-[#B32B2C]/75' : 'text-white/75')}>
             {description}
           </p>
         </div>
@@ -187,6 +189,7 @@ function SidebarContent({
   onLogout,
   isActive,
   activeItem,
+  badges,
 }: {
   isMobile?: boolean
   collapsed: boolean
@@ -195,6 +198,7 @@ function SidebarContent({
   onLogout: () => void
   isActive: (path: string) => boolean
   activeItem?: { label: string; icon: React.ElementType }
+  badges: Record<string, string | null>
 }) {
   const navRef = useRef<HTMLElement>(null)
   const scrollTopRef = useRef(0)
@@ -272,6 +276,7 @@ function SidebarContent({
                 <NavItem
                   key={item.path}
                   {...item}
+                  badge={badges[item.path] ?? item.badge}
                   collapsed={collapsed && !isMobile}
                   onClick={onCloseMobile}
                   active={isActive(item.path)}
@@ -324,6 +329,13 @@ export function Sidebar() {
 
   const activeItem = navItems.flatMap(g => g.items).find(i => isActive(i.path))
 
+  const [unreadSupport, setUnreadSupport] = useState(0)
+  useEffect(() => {
+    const q = query(collection(db, 'supportTickets'), where('unreadByAdmin', '==', true))
+    return onSnapshot(q, snap => setUnreadSupport(snap.size), () => setUnreadSupport(0))
+  }, [])
+  const badges = { '/support': unreadSupport > 0 ? String(unreadSupport) : null }
+
   const handleLogout = async () => {
     await logout()
     navigate('/login', { replace: true })
@@ -347,6 +359,7 @@ export function Sidebar() {
           onLogout={handleLogout}
           isActive={isActive}
           activeItem={activeItem}
+          badges={badges}
         />
       </motion.aside>
 
@@ -384,6 +397,7 @@ export function Sidebar() {
                 onLogout={handleLogout}
                 isActive={isActive}
                 activeItem={activeItem}
+                badges={badges}
               />
             </motion.aside>
           </>

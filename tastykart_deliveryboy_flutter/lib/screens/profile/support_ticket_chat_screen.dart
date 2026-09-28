@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../constants/color_constants.dart';
@@ -20,26 +22,70 @@ class SupportTicketChatScreen extends StatefulWidget {
       _SupportTicketChatScreenState();
 }
 
-class _SupportTicketChatScreenState extends State<SupportTicketChatScreen> {
+class _SupportTicketChatScreenState extends State<SupportTicketChatScreen>
+    with WidgetsBindingObserver {
   final _ctrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   bool _sending = false;
+  late SupportTicket _ticket = widget.ticket;
+  StreamSubscription<SupportTicket?>? _ticketSub;
+  Timer? _viewingHeartbeat;
+  bool _viewing = false;
 
   @override
   void initState() {
     super.initState();
-    SupportTicketService.markReadByPartner(widget.ticket.id);
+    WidgetsBinding.instance.addObserver(this);
+    _startViewing();
+    _ticketSub = SupportTicketService.watchTicket(widget.ticket.id).listen((t) {
+      if (t == null || !mounted) return;
+      setState(() => _ticket = t);
+      if (_viewing && t.unreadByPartner) {
+        SupportTicketService.markReadByPartner(t.id);
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startViewing();
+    } else {
+      _stopViewing();
+    }
+  }
+
+  void _startViewing() {
+    if (_viewing) return;
+    _viewing = true;
+    SupportTicketService.setPartnerViewing(widget.ticket.id, true);
+    _viewingHeartbeat?.cancel();
+    _viewingHeartbeat = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => SupportTicketService.setPartnerViewing(widget.ticket.id, true),
+    );
+  }
+
+  void _stopViewing() {
+    if (!_viewing) return;
+    _viewing = false;
+    _viewingHeartbeat?.cancel();
+    _viewingHeartbeat = null;
+    SupportTicketService.setPartnerViewing(widget.ticket.id, false);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopViewing();
+    _ticketSub?.cancel();
     _ctrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
 
   Color get _statusColor {
-    switch (widget.ticket.status) {
+    switch (_ticket.status) {
       case TicketStatus.open:       return const Color(0xFF1565C0);
       case TicketStatus.inProgress: return const Color(0xFFE65100);
       case TicketStatus.closed:     return const Color(0xFF2E7D32);
@@ -47,7 +93,7 @@ class _SupportTicketChatScreenState extends State<SupportTicketChatScreen> {
   }
 
   String get _statusLabel {
-    switch (widget.ticket.status) {
+    switch (_ticket.status) {
       case TicketStatus.open:       return 'Open';
       case TicketStatus.inProgress: return 'In Progress';
       case TicketStatus.closed:     return 'Closed';
@@ -57,7 +103,7 @@ class _SupportTicketChatScreenState extends State<SupportTicketChatScreen> {
   Future<void> _send() async {
     final text = _ctrl.text.trim();
     if (text.isEmpty || _sending) return;
-    if (widget.ticket.status == TicketStatus.closed) {
+    if (_ticket.status == TicketStatus.closed) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('This ticket is closed. Open a new ticket if needed.'),
@@ -178,7 +224,7 @@ class _SupportTicketChatScreenState extends State<SupportTicketChatScreen> {
           ),
 
           // Input bar
-          if (widget.ticket.status != TicketStatus.closed)
+          if (_ticket.status != TicketStatus.closed)
             Container(
               color: AppColors.white,
               padding: EdgeInsets.fromLTRB(

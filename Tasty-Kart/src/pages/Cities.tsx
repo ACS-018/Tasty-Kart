@@ -3,12 +3,43 @@ import { Plus, MapPin, Loader2, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Modal, ConfirmDialog } from '@/components/ui/Modal'
+import { Input, Select } from '@/components/ui/Input'
 import { useToast } from '@/components/ui/Toast'
 import { useAuth } from '@/context/AuthContext'
 import { type City } from '@/data/dummy'
 import { addDocumentToFirestore, updateDocumentInFirestore, deleteDocumentFromFirestore, subscribeToCollection } from '@/lib/firebaseService'
 
 const emptyForm = { name: '', state: '', radius: 20, hours: { open: '06:00', close: '23:00' } }
+
+const INDIAN_STATES = [
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat',
+  'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh',
+  'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab',
+  'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh',
+  'Uttarakhand', 'West Bengal',
+]
+
+const INDIAN_UNION_TERRITORIES = [
+  'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu',
+  'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
+]
+
+const ALL_STATES = [...INDIAN_STATES, ...INDIAN_UNION_TERRITORIES]
+
+/** Maps free-typed values like "telangana" or "andhrapradesh" to the canonical state name. */
+function canonicalState(value: string) {
+  const key = value.replace(/\s+/g, '').toLowerCase()
+  if (!key) return ''
+  return ALL_STATES.find(state => state.replace(/\s+/g, '').toLowerCase() === key) || value.trim()
+}
+
+function formatTime12h(value: string) {
+  const [h, m] = value.split(':').map(Number)
+  if (Number.isNaN(h) || Number.isNaN(m)) return value
+  const period = h >= 12 ? 'PM' : 'AM'
+  const hour = h % 12 || 12
+  return `${hour}:${String(m).padStart(2, '0')} ${period}`
+}
 
 function firestoreMessage(err: unknown) {
   if (err && typeof err === 'object' && 'message' in err) return String((err as { message: unknown }).message)
@@ -125,11 +156,10 @@ export function Cities() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {[
           { label: 'Total', value: cities.length, color: 'bg-blue-100' },
           { label: 'Active', value: cities.filter(c => c.isActive).length, color: 'bg-green-100' },
-          { label: 'Restaurants', value: cities.reduce((s, c) => s + (c.restaurantCount || 0), 0), color: 'bg-amber-100' },
         ].map(stat => (
           <div key={stat.label} className={`${stat.color} rounded-xl p-4`}>
             <p className="text-xs text-gray-600">{stat.label}</p>
@@ -157,12 +187,15 @@ export function Cities() {
                 <div>
                   <p className="font-semibold text-gray-900">{city.name}</p>
                   <p className="text-xs text-gray-500">
-                    {city.state ? `${city.state} • ` : ''}{city.deliveryRadiusKm || 0}km radius
+                    {city.state ? `${city.state} • ` : ''}{city.deliveryRadiusKm || 0} km delivery radius
+                    {city.operatingHours?.startTime && city.operatingHours?.endTime
+                      ? ` • Open ${formatTime12h(city.operatingHours.startTime)} – ${formatTime12h(city.operatingHours.endTime)}`
+                      : ''}
                   </p>
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" variant="secondary" onClick={() => {setEdit(city); setFormData({name: city.name, state: city.state || '', radius: city.deliveryRadiusKm || 20, hours: {open: city.operatingHours?.startTime || '06:00', close: city.operatingHours?.endTime || '23:00'}}); setShow(true)}}>Edit</Button>
+                <Button size="sm" variant="secondary" onClick={() => {setEdit(city); setFormData({name: city.name, state: canonicalState(city.state || ''), radius: city.deliveryRadiusKm || 20, hours: {open: city.operatingHours?.startTime || '06:00', close: city.operatingHours?.endTime || '23:00'}}); setShow(true)}}>Edit</Button>
                 <Button size="sm" variant="danger" icon={<Trash2 size={14} />} onClick={() => setDeleteTarget(city)}>Delete</Button>
               </div>
             </div>
@@ -171,13 +204,52 @@ export function Cities() {
       </div>
 
       <Modal open={show} onClose={() => setShow(false)} title={edit ? 'Edit City' : 'Add City'} size="sm">
-        <form onSubmit={handleSave} className="space-y-3">
-          <input type="text" placeholder="City Name" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required />
-          <input type="text" placeholder="State" value={formData.state} onChange={e => setFormData({...formData, state: e.target.value})} className="w-full px-3 py-2 border rounded-lg" />
-          <input type="number" placeholder="Radius (km)" value={formData.radius} onChange={e => setFormData({...formData, radius: Number(e.target.value)})} min="1" max="100" className="w-full px-3 py-2 border rounded-lg" />
-          <div className="flex gap-2">
-            <input type="time" value={formData.hours.open} onChange={e => setFormData({...formData, hours: {...formData.hours, open: e.target.value}})} className="flex-1 px-3 py-2 border rounded-lg" />
-            <input type="time" value={formData.hours.close} onChange={e => setFormData({...formData, hours: {...formData.hours, close: e.target.value}})} className="flex-1 px-3 py-2 border rounded-lg" />
+        <form onSubmit={handleSave} className="space-y-4">
+          <Input
+            label="City Name *"
+            placeholder="Enter city name"
+            value={formData.name}
+            onChange={e => setFormData({...formData, name: e.target.value})}
+            required
+          />
+          <Select
+            label="State"
+            value={formData.state}
+            onChange={e => setFormData({...formData, state: e.target.value})}
+          >
+            <option value="">Select state</option>
+            <optgroup label="States">
+              {INDIAN_STATES.map(state => <option key={state} value={state}>{state}</option>)}
+            </optgroup>
+            <optgroup label="Union Territories">
+              {INDIAN_UNION_TERRITORIES.map(ut => <option key={ut} value={ut}>{ut}</option>)}
+            </optgroup>
+            {formData.state && !ALL_STATES.includes(formData.state) && (
+              <option value={formData.state}>{formData.state}</option>
+            )}
+          </Select>
+          <Input
+            type="number"
+            label="Delivery Radius (km)"
+            placeholder="Enter delivery radius in km"
+            value={formData.radius}
+            onChange={e => setFormData({...formData, radius: Number(e.target.value)})}
+            min="1"
+            max="100"
+          />
+          <div className="flex gap-3">
+            <Input
+              type="time"
+              label="Opening Time"
+              value={formData.hours.open}
+              onChange={e => setFormData({...formData, hours: {...formData.hours, open: e.target.value}})}
+            />
+            <Input
+              type="time"
+              label="Closing Time"
+              value={formData.hours.close}
+              onChange={e => setFormData({...formData, hours: {...formData.hours, close: e.target.value}})}
+            />
           </div>
           <p className="text-xs text-gray-500">
             Active cities appear on the delivery partner app when they register and choose a city.

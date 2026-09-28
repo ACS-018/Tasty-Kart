@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import '../constants/app_constants.dart';
 import '../models/delivery_partner.dart';
@@ -409,28 +410,26 @@ class DeliveryPartnerService {
 
     final today = _dayKey(DateTime.now());
     final ref = _partners.doc(partnerId);
-    var credited = false;
-    var balanceAfter = 0;
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
-      final data = snap.data() ?? {};
-      if ((data['dailyTargetBonusDate'] ?? '').toString() == today) return;
-      final balance = (data['pocketBalance'] as num?)?.toInt() ?? 0;
-      balanceAfter = balance + bonus;
-      credited = true;
-      tx.set(ref, {
-        'dailyTargetBonusDate': today,
-        'pocketBalance': FieldValue.increment(bonus),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    });
-    if (!credited) return;
-
-    await _db
+    // Shared with the onOrderDeliveredDailyBonus Cloud Function: whichever
+    // runs first creates this doc, the other sees it and skips.
+    final bonusRef = _db
         .collection(FirestorePaths.transactions)
-        .doc('bonus_${partnerId}_$today')
-        .set({
-          'id': 'bonus_${partnerId}_$today',
+        .doc('bonus_${partnerId}_$today');
+    try {
+      await _db.runTransaction((tx) async {
+        final snap = await tx.get(ref);
+        final existing = await tx.get(bonusRef);
+        if (existing.exists) return;
+        final data = snap.data() ?? {};
+        final balance = (data['pocketBalance'] as num?)?.toInt() ?? 0;
+        final storedDay = (data['dailyTargetBonusDate'] ?? '').toString();
+        tx.set(ref, {
+          if (storedDay.compareTo(today) < 0) 'dailyTargetBonusDate': today,
+          'pocketBalance': FieldValue.increment(bonus),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        tx.set(bonusRef, {
+          'id': bonusRef.id,
           'partnerId': partnerId,
           'partnerName': partnerName,
           'type': 'bonus',
@@ -440,12 +439,16 @@ class DeliveryPartnerService {
           'status': 'completed',
           'orderId': '',
           'orderNumber': '',
-          'balanceBefore': balanceAfter - bonus,
-          'balanceAfter': balanceAfter,
+          'balanceBefore': balance,
+          'balanceAfter': balance + bonus,
           'remarks': 'Today\'s target completed',
           'createdAt': FieldValue.serverTimestamp(),
           'processedAt': FieldValue.serverTimestamp(),
         });
+      });
+    } catch (e) {
+      debugPrint('[DailyBonus] credit failed: $e');
+    }
   }
 
   static Future<void> setOnline({
@@ -481,7 +484,7 @@ class DeliveryPartnerService {
       final limit = personal > 0 ? personal : adminDefault;
       final current = (data['cashInHand'] as num?)?.toInt() ?? 0;
       final next = current + amount;
-      over = limit > 0 && next > limit;
+      over = limit > 0 && next >= limit;
       final clock = over
           ? _clockPatch(data: data, goingOffline: true, startingSession: false)
           : const <String, dynamic>{};
@@ -505,7 +508,18 @@ class DeliveryPartnerService {
         : settings.deliveryPartner.cashLimitDefault;
     if (limit <= 0) return false;
     final held = (data['cashInHand'] as num?)?.toInt() ?? 0;
-    return held > limit;
+    return held > 0 && held >= limit;
+  }
+
+  /// Sets an online (not mid-trip) partner offline when their cash in hand has
+  /// reached the limit. Returns true when the partner was taken offline.
+  static Future<bool> enforceCashLimit(String partnerId) async {
+    final snap = await _partners.doc(partnerId).get();
+    final status = (snap.data()?['status'] ?? '').toString().toLowerCase().trim();
+    if (status != 'online' && status != 'available') return false;
+    if (!await isOverCashLimit(partnerId)) return false;
+    await _writeDuty(partnerId: partnerId, status: 'offline');
+    return true;
   }
 
   static const _terminalOrderStatuses = <String>{'delivered', 'cancelled', 'refunded'};

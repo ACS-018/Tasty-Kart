@@ -10,6 +10,7 @@ import '../../services/delivery_partner_service.dart';
 import '../../services/fcm_service.dart';
 import '../../services/location_service.dart';
 import '../../services/order_service.dart';
+import '../../services/settings_service.dart';
 import '../../utils/app_feedback.dart';
 import '../earnings/earnings_tab.dart';
 import '../order/active_delivery_host.dart';
@@ -35,10 +36,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// start/stop location tracking on actual transitions, not on every rebuild.
   bool? _wasOnline;
 
+  /// Admin default cash limit; null until settings load.
+  int? _adminCashLimit;
+  StreamSubscription<PlatformSettings>? _settingsSub;
+  bool _enforcingCash = false;
+  final Set<String> _returnedOrders = {};
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _settingsSub = SettingsService.watchSettings().listen((settings) {
+      final limit = settings.deliveryPartner.cashLimitDefault;
+      if (limit == _adminCashLimit) return;
+      if (mounted) setState(() => _adminCashLimit = limit);
+      _enforceCashLimit();
+    });
+    _enforceCashLimit();
     // Register this device only while the partner has notifications on.
     unawaited(
       FCMService.syncPartnerPreference(
@@ -61,6 +75,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (old.partner.isOnline != widget.partner.isOnline) {
       _syncTracking(widget.partner);
     }
+    if (old.partner.cashInHand != widget.partner.cashInHand ||
+        old.partner.cashLimit != widget.partner.cashLimit ||
+        old.partner.status != widget.partner.status) {
+      _enforceCashLimit();
+    }
   }
 
   @override
@@ -68,11 +87,55 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Re-sync tracking when the app returns to the foreground.
     if (state == AppLifecycleState.resumed) {
       _syncTracking(widget.partner);
+      _enforceCashLimit();
     }
+  }
+
+  bool _overCashLimit(DeliveryPartner partner) {
+    final adminLimit = _adminCashLimit;
+    if (adminLimit == null && partner.cashLimit <= 0) return false;
+    return partner.cashLimitExceeded(partner.effectiveCashLimit(adminLimit ?? 0));
+  }
+
+  /// Takes the partner offline if they are online with cash in hand at or above
+  /// the limit. Mid-trip partners are handled when the trip completes.
+  Future<void> _enforceCashLimit() async {
+    if (_enforcingCash) return;
+    final partner = widget.partner;
+    final status = partner.status.toLowerCase().trim();
+    if (status != 'online' && status != 'available') return;
+    _enforcingCash = true;
+    try {
+      final forced = await DeliveryPartnerService.enforceCashLimit(partner.id);
+      if (forced && mounted) {
+        AppFeedback.showError(
+          context,
+          'Cash limit reached. Pay your cash in hand to TastyKart to go online again.',
+        );
+      }
+    } catch (_) {
+    } finally {
+      _enforcingCash = false;
+    }
+  }
+
+  /// Hands an order assigned while over the cash limit back for reassignment.
+  void _returnOrder(DeliveryOrder order, DeliveryPartner partner) {
+    if (!_returnedOrders.add(order.id)) return;
+    unawaited(
+      OrderService.reject(
+        order: order,
+        partnerId: partner.id,
+        reason: 'Cash limit reached',
+      ).catchError((_) {
+        _returnedOrders.remove(order.id);
+      }),
+    );
   }
 
   @override
   void dispose() {
+    _settingsSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     // Stop tracking when the screen is permanently removed (e.g. logout).
     LocationService.stopBackgroundTracking();
@@ -108,9 +171,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       stream: OrderService.watchForPartner(partner.id),
       builder: (context, snapshot) {
         final orders = snapshot.data ?? const <DeliveryOrder>[];
-        final incoming = partner.isOnline
+        final assigned = partner.isOnline
             ? OrderService.incomingFor(orders, partnerId: partner.id)
             : null;
+        final overLimit = _overCashLimit(partner);
+        if (assigned != null && overLimit) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _returnOrder(assigned, partner),
+          );
+        }
+        final incoming = overLimit ? null : assigned;
         final active = incoming == null
             ? OrderService.activeTripFor(orders)
             : null;

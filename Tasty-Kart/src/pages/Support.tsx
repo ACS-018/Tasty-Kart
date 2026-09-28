@@ -39,6 +39,21 @@ function formatTs(ts: Timestamp | null | undefined): string {
     + ' ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
 }
 
+type TopicFilter = 'all' | 'orders' | 'payments'
+
+const TOPIC_TABS: { id: TopicFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'orders', label: 'Orders' },
+  { id: 'payments', label: 'Payments' },
+]
+
+function topicOf(category: string): TopicFilter | 'other' {
+  const value = String(category || '').toLowerCase()
+  if (value.startsWith('order')) return 'orders'
+  if (value.startsWith('payment')) return 'payments'
+  return 'other'
+}
+
 function StatusBadge({ status }: { status: TicketStatus }) {
   const map: Record<TicketStatus, { label: string; cls: string; icon: React.ReactNode }> = {
     open:        { label: 'Open',        cls: 'bg-blue-100 text-blue-700',   icon: <Clock size={11} /> },
@@ -63,6 +78,7 @@ export function Support() {
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
   const [filterStatus, setFilterStatus] = useState<'all' | TicketStatus>('all')
+  const [filterTopic, setFilterTopic] = useState<TopicFilter>('all')
   const [search, setSearch] = useState('')
   const msgBottomRef = useRef<HTMLDivElement>(null)
 
@@ -89,14 +105,16 @@ export function Support() {
   }, [selected?.id])
 
   // Mark ticket read by admin when opened
+  const liveSelectedUnread = tickets.find(t => t.id === selected?.id)?.unreadByAdmin ?? false
   useEffect(() => {
-    if (selected?.unreadByAdmin) {
+    if (selected && liveSelectedUnread) {
       updateDoc(doc(db, 'supportTickets', selected.id), { unreadByAdmin: false }).catch(() => {})
       setTickets(prev => prev.map(t => t.id === selected.id ? { ...t, unreadByAdmin: false } : t))
     }
-  }, [selected?.id])
+  }, [selected?.id, liveSelectedUnread])
 
   const filtered = tickets.filter(t => {
+    if (filterTopic !== 'all' && topicOf(t.category) !== filterTopic) return false
     if (filterStatus !== 'all' && t.status !== filterStatus) return false
     if (!search.trim()) return true
     const q = search.toLowerCase()
@@ -121,6 +139,8 @@ export function Support() {
       })
       await updateDoc(doc(db, 'supportTickets', selected.id), {
         updatedAt: now,
+        lastMessage: reply.trim(),
+        lastSenderType: 'admin',
         unreadByPartner: true,
         status: selected.status === 'open' ? 'in_progress' : selected.status,
       })
@@ -160,12 +180,39 @@ export function Support() {
       )}>
         <div className="p-4 border-b border-gray-100">
           <div className="flex items-center gap-2 mb-3">
-            <h2 className="font-bold text-gray-900 text-lg flex-1">Support Tickets</h2>
+            <h2 className="font-bold text-gray-900 text-lg flex-1">Delivery Partner Tickets</h2>
             {unreadCount > 0 && (
               <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
                 {unreadCount} new
               </span>
             )}
+          </div>
+          <div className="flex border-b border-gray-200 mb-3 -mx-4 px-4">
+            {TOPIC_TABS.map(tab => {
+              const count = tab.id === 'all'
+                ? tickets.filter(t => t.unreadByAdmin).length
+                : tickets.filter(t => t.unreadByAdmin && topicOf(t.category) === tab.id).length
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setFilterTopic(tab.id)}
+                  className={cn(
+                    'flex items-center gap-1.5 px-3 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors',
+                    filterTopic === tab.id
+                      ? 'border-[#B32B2C] text-[#B32B2C]'
+                      : 'border-transparent text-gray-500 hover:text-gray-800',
+                  )}
+                >
+                  {tab.label}
+                  {count > 0 && (
+                    <span className="text-[10px] font-bold bg-[#B32B2C] text-white rounded-full px-1.5 min-w-[18px] text-center">
+                      {count}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
           </div>
           <input
             value={search}

@@ -20,6 +20,18 @@ class SupportTicketService {
         .map((s) => s.docs.map(SupportTicket.fromDoc).toList());
   }
 
+  static Stream<SupportTicket?> watchTicket(String ticketId) {
+    return _col
+        .doc(ticketId)
+        .snapshots()
+        .map((s) => s.exists ? SupportTicket.fromDoc(s) : null);
+  }
+
+  static Future<SupportTicket?> getTicket(String ticketId) async {
+    final snap = await _col.doc(ticketId).get();
+    return snap.exists ? SupportTicket.fromDoc(snap) : null;
+  }
+
   static Stream<List<TicketMessage>> watchMessages(String ticketId) {
     return _col
         .doc(ticketId)
@@ -49,8 +61,12 @@ class SupportTicketService {
       'category': category,
       'subject': subject,
       'status': 'open',
+      'source': 'delivery_partner',
       'unreadByAdmin': true,
       'unreadByPartner': false,
+      'partnerViewing': false,
+      'lastMessage': firstMessage.trim(),
+      'lastSenderType': 'partner',
       'createdAt': now,
       'updatedAt': now,
     });
@@ -79,11 +95,25 @@ class SupportTicketService {
     await _col.doc(ticketId).update({
       'updatedAt': now,
       'unreadByAdmin': true,
+      'lastMessage': message.trim(),
+      'lastSenderType': 'partner',
     });
   }
 
   /// Mark ticket messages as read by partner (when they open the chat).
   static Future<void> markReadByPartner(String ticketId) {
     return _col.doc(ticketId).update({'unreadByPartner': false});
+  }
+
+  /// While the chat is open the app keeps this fresh; the reply-push Cloud
+  /// Function skips the push if `partnerViewingAt` is under 2 minutes old.
+  static Future<void> setPartnerViewing(String ticketId, bool viewing) async {
+    try {
+      await _col.doc(ticketId).update({
+        'partnerViewing': viewing,
+        'partnerViewingAt': FieldValue.serverTimestamp(),
+        if (viewing) 'unreadByPartner': false,
+      });
+    } catch (_) {}
   }
 }

@@ -34,6 +34,7 @@ class DeliveryPartner {
   final bool termsAccepted;
   final List<String> legalAccepted;
   final bool activationAcknowledged;
+  final bool bankDetailsConfirmed;
   final double rating;
   final int completedOrders;
   final int cancelledOrders;
@@ -98,6 +99,7 @@ class DeliveryPartner {
     this.termsAccepted = false,
     this.legalAccepted = const [],
     this.activationAcknowledged = false,
+    this.bankDetailsConfirmed = true,
     this.rating = 0,
     this.completedOrders = 0,
     this.cancelledOrders = 0,
@@ -145,6 +147,7 @@ class DeliveryPartner {
   bool get hasVehicle => vehicle.trim().isNotEmpty;
 
   bool get hasBankDetails =>
+      bankDetailsConfirmed &&
       accountHolderName.trim().isNotEmpty &&
       bankAccount.trim().isNotEmpty &&
       ifsc.trim().isNotEmpty;
@@ -163,8 +166,7 @@ class DeliveryPartner {
     return url != null && url.trim().isNotEmpty;
   }
 
-  bool hasAcceptedLegal(String id) =>
-      termsAccepted || legalAccepted.contains(id);
+  bool hasAcceptedLegal(String id) => legalAccepted.contains(id);
 
   bool get awaitingApproval => termsAccepted && !approved;
 
@@ -199,12 +201,25 @@ class DeliveryPartner {
     return adminDefault > 0 ? adminDefault : 0;
   }
 
-  /// Once cash in hand reaches the limit, all of it must be paid to TastyKart
-  /// before the partner can go online again.
+  /// COD cash held above the allowed limit — only this excess must be paid
+  /// to TastyKart (not the full cash in hand). Cash in hand is not earnings.
+  ///
+  /// Master Formula Implementation:
+  /// - Pocket Balance = Delivery Earnings + Bonuses + Incentives
+  /// - Tip Balance = Tips (tracked separately)
+  /// - Total Withdrawable = Pocket Balance + Tip Balance
+  /// - Excess Cash = MAX(0, Cash In Hand - Cash Limit - Total Withdrawable)
   int cashDue(int limit) {
     if (limit <= 0) return 0;
     final held = cashInHandRupees;
-    return held > 0 && held >= limit ? held : 0;
+
+    // Total withdrawable earnings (Pocket + Tips)
+    // Partner can use ALL their earnings to offset what they owe
+    final totalWithdrawable = displayPocket + tipBalance.round();
+
+    // Excess Cash = MAX(0, Cash In Hand - Cash Limit - Total Earnings)
+    final due = held - limit - totalWithdrawable;
+    return due > 0 ? due : 0;
   }
 
   bool cashLimitExceeded(int limit) => cashDue(limit) > 0;
@@ -270,8 +285,8 @@ class DeliveryPartner {
       earnings: map['earnings'] as num? ?? 0,
       bookedSlots: _bookedSlots(map['bookedSlots']),
       notificationsEnabled: map['notificationsEnabled'] != false,
-      pocketBalance: map['pocketBalance'] as num? ??
-          (map['earnings'] as num? ?? 0),
+      pocketBalance:
+          map['pocketBalance'] as num? ?? (map['earnings'] as num? ?? 0),
       cashLimit: map['cashLimit'] as num? ?? 0,
       cashInHand: map['cashInHand'] as num? ?? 0,
       tipBalance: map['tipBalance'] as num? ?? 0,
@@ -284,6 +299,7 @@ class DeliveryPartner {
       onlineSince: _asDate(map['onlineSince']),
       onlineMinutesToday: (map['onlineMinutesToday'] as num?)?.toInt() ?? 0,
       onlineMinutesDate: (map['onlineMinutesDate'] as String? ?? '').trim(),
+      bankDetailsConfirmed: map['bankDetailsConfirmed'] != false,
       // FCM tokens
       fcmTokens: _stringList(map['fcmTokens']),
       // Metadata

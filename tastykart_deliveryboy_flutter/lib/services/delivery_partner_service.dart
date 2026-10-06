@@ -179,6 +179,12 @@ class DeliveryPartnerService {
     return _merge(partnerId, {'vehicle': ''});
   }
 
+  /// Clears saved personal fields so AuthGate shows PersonalDetailsScreen again.
+  /// In-session drafts stay in [OnboardingController].
+  static Future<void> clearPersonalDetails({required String partnerId}) {
+    return _merge(partnerId, {'name': '', 'dateOfBirth': '', 'gender': ''});
+  }
+
   /// Clears documentsComplete so AuthGate steps back to UploadDocumentsScreen.
   static Future<void> clearDocumentsComplete({required String partnerId}) {
     return _merge(partnerId, {'documentsComplete': false});
@@ -193,15 +199,11 @@ class DeliveryPartnerService {
     });
   }
 
-  /// Clears bank details so AuthGate steps back to BankDetailsScreen.
+  /// Steps AuthGate back to BankDetailsScreen without clearing the saved data.
+  /// Sets bankDetailsConfirmed=false so hasBankDetails returns false and
+  /// AuthGate re-shows BankDetailsScreen pre-filled with existing values.
   static Future<void> clearBankDetails({required String partnerId}) {
-    return _merge(partnerId, {
-      'accountHolderName': '',
-      'bankAccount': '',
-      'ifsc': '',
-      'upiId': '',
-      'ifscVerified': false,
-    });
+    return _merge(partnerId, {'bankDetailsConfirmed': false});
   }
 
   /// Clears trainingComplete so AuthGate steps back to OnlineTrainingScreen.
@@ -239,6 +241,8 @@ class DeliveryPartnerService {
       'ifsc': ifsc.trim().toUpperCase(),
       'upiId': upiId.trim(),
       'ifscVerified': ifscVerified,
+      // Mark confirmed so hasBankDetails returns true after saving
+      'bankDetailsConfirmed': true,
     });
   }
 
@@ -289,9 +293,7 @@ class DeliveryPartnerService {
   }) {
     return _merge(partnerId, {
       'legalAccepted': FieldValue.arrayRemove([pageId]),
-      if (resetTerms) ...{
-        'termsAccepted': false,
-      },
+      if (resetTerms) ...{'termsAccepted': false},
     });
   }
 
@@ -301,6 +303,33 @@ class DeliveryPartnerService {
       'legalAccepted': <String>[],
       'termsAccepted': false,
     });
+  }
+
+  /// Steps AuthGate back one screen in the legal flow (agreement → training, etc.).
+  static Future<void> stepBackFromLegalPage({
+    required String partnerId,
+    required String pageId,
+  }) async {
+    switch (pageId) {
+      case 'agreement':
+        await clearTrainingComplete(partnerId: partnerId);
+        await clearAllLegal(partnerId: partnerId);
+        return;
+      case 'terms':
+        await _merge(partnerId, {
+          'legalAccepted': FieldValue.arrayRemove(['terms', 'agreement']),
+          'termsAccepted': false,
+        });
+        return;
+      case 'privacy':
+        await _merge(partnerId, {
+          'legalAccepted': FieldValue.arrayRemove(['privacy', 'terms']),
+          'termsAccepted': false,
+        });
+        return;
+      default:
+        await clearLegalPage(partnerId: partnerId, pageId: pageId);
+    }
   }
 
   static Future<void> acknowledgeActivation({required String partnerId}) {
@@ -370,6 +399,21 @@ class DeliveryPartnerService {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
+  }
+
+  /// Writes a `lastSeen` heartbeat to Firestore.
+  /// Called periodically while the partner is online so the Cloud Function
+  /// scheduler can detect uninstalled / killed apps and mark them offline.
+  static Future<void> writeHeartbeat(String partnerId) async {
+    try {
+      await _partners.doc(partnerId).update({
+        'lastSeen': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      // Non-critical — location updates already write lastSeen,
+      // this is just a fallback for when GPS is paused.
+    }
   }
 
   /// Starts today's clock if the partner is already online and no session
@@ -455,6 +499,8 @@ class DeliveryPartnerService {
     required String partnerId,
     required bool online,
     required String currentStatus,
+    double? lat,
+    double? lng,
   }) async {
     final value = currentStatus.toLowerCase().trim();
     if (value == 'blocked') return;
@@ -463,7 +509,17 @@ class DeliveryPartnerService {
       throw const CashLimitException();
     }
     final next = online ? (value == 'busy' ? 'busy' : 'online') : 'offline';
-    await _writeDuty(partnerId: partnerId, status: next);
+    // When going online, include the last-known GPS coords in the same write
+    // so the admin auto-assigner immediately sees valid currentLat/currentLng.
+    final locationExtra = (online && lat != null && lng != null)
+        ? {
+            'currentLat': lat,
+            'currentLng': lng,
+            'lastLocationUpdate': FieldValue.serverTimestamp(),
+            'lastSeen': FieldValue.serverTimestamp(),
+          }
+        : <String, dynamic>{};
+    await _writeDuty(partnerId: partnerId, status: next, extra: locationExtra);
   }
 
   /// Adds collected COD to cash in hand. Returns true when that crosses the limit
@@ -484,7 +540,7 @@ class DeliveryPartnerService {
       final limit = personal > 0 ? personal : adminDefault;
       final current = (data['cashInHand'] as num?)?.toInt() ?? 0;
       final next = current + amount;
-      over = limit > 0 && next >= limit;
+      over = limit > 0 && next > limit;
       final clock = over
           ? _clockPatch(data: data, goingOffline: true, startingSession: false)
           : const <String, dynamic>{};
@@ -508,21 +564,28 @@ class DeliveryPartnerService {
         : settings.deliveryPartner.cashLimitDefault;
     if (limit <= 0) return false;
     final held = (data['cashInHand'] as num?)?.toInt() ?? 0;
-    return held > 0 && held >= limit;
+    return held > 0 && held > limit;
   }
 
   /// Sets an online (not mid-trip) partner offline when their cash in hand has
   /// reached the limit. Returns true when the partner was taken offline.
   static Future<bool> enforceCashLimit(String partnerId) async {
     final snap = await _partners.doc(partnerId).get();
-    final status = (snap.data()?['status'] ?? '').toString().toLowerCase().trim();
+    final status = (snap.data()?['status'] ?? '')
+        .toString()
+        .toLowerCase()
+        .trim();
     if (status != 'online' && status != 'available') return false;
     if (!await isOverCashLimit(partnerId)) return false;
     await _writeDuty(partnerId: partnerId, status: 'offline');
     return true;
   }
 
-  static const _terminalOrderStatuses = <String>{'delivered', 'cancelled', 'refunded'};
+  static const _terminalOrderStatuses = <String>{
+    'delivered',
+    'cancelled',
+    'refunded',
+  };
 
   /// If the partner doc still shows BUSY and/or currentOrder pointing at a
   /// terminal (or missing) order, clear BUSY back to ONLINE and drop the
@@ -546,14 +609,22 @@ class DeliveryPartnerService {
       bool hasLiveOrder = false;
       if (currentOrderId.isNotEmpty) {
         try {
-          final orderSnap = await _db.collection('orders').doc(currentOrderId).get();
+          final orderSnap = await _db
+              .collection('orders')
+              .doc(currentOrderId)
+              .get();
           if (orderSnap.exists) {
             final orderData = orderSnap.data() ?? {};
-            final orderStatus = (orderData['status'] as String? ?? '').toLowerCase().trim();
-            hasLiveOrder = !_terminalOrderStatuses.contains(orderStatus) &&
+            final orderStatus = (orderData['status'] as String? ?? '')
+                .toLowerCase()
+                .trim();
+            hasLiveOrder =
+                !_terminalOrderStatuses.contains(orderStatus) &&
                 (orderData['deliveryPartnerId'] as String? ?? '') == partnerId;
           }
-        } catch (_) { /* assume stale */ }
+        } catch (_) {
+          /* assume stale */
+        }
       }
 
       // Fallback check: scan last 20 assigned orders for any non-terminal one.
@@ -565,17 +636,23 @@ class DeliveryPartnerService {
               .limit(20)
               .get();
           hasLiveOrder = recent.docs.any((d) {
-            final s = (d.data()['status'] as String? ?? '').toLowerCase().trim();
+            final s = (d.data()['status'] as String? ?? '')
+                .toLowerCase()
+                .trim();
             return !_terminalOrderStatuses.contains(s);
           });
-        } catch (_) { /* missing idx -> ignore */ }
+        } catch (_) {
+          /* missing idx -> ignore */
+        }
       }
 
       if (hasLiveOrder) return false; // legitimately BUSY — leave alone
 
       // No live order found but doc says BUSY / has currentOrder — unstick.
       final over = await isOverCashLimit(partnerId);
-      final nextStatus = over ? 'offline' : (status == 'blocked' ? 'blocked' : 'online');
+      final nextStatus = over
+          ? 'offline'
+          : (status == 'blocked' ? 'blocked' : 'online');
       await _writeDuty(
         partnerId: partnerId,
         status: nextStatus,
@@ -599,7 +676,8 @@ class DeliveryPartnerService {
       final orderSnap = await _db.collection('orders').doc(orderId).get();
       if (orderSnap.exists) {
         final data = orderSnap.data() ?? {};
-        final assigned = (data['deliveryPartnerId'] as String? ?? '') == partnerId ||
+        final assigned =
+            (data['deliveryPartnerId'] as String? ?? '') == partnerId ||
             (data['deliveryPartnerId'] as String? ?? '').isEmpty;
         if (!assigned) {
           throw StateError('Order $orderId is assigned to a different partner');
@@ -631,9 +709,13 @@ class DeliveryPartnerService {
   static Future<void> completeTrip({
     required String partnerId,
     required int payout,
+    int tip = 0,
   }) async {
     final over = await isOverCashLimit(partnerId);
     final ref = _partners.doc(partnerId);
+    // The fee portion goes to pocketBalance; the tip (if any) goes to
+    // tipBalance so the earnings screen can display them separately.
+    final fee = payout - tip;
     await _db.runTransaction((tx) async {
       final snap = await tx.get(ref);
       final data = snap.data() ?? {};
@@ -645,7 +727,8 @@ class DeliveryPartnerService {
         'currentOrder': FieldValue.delete(),
         'completedOrders': FieldValue.increment(1),
         'earnings': FieldValue.increment(payout),
-        'pocketBalance': FieldValue.increment(payout),
+        'pocketBalance': FieldValue.increment(fee),
+        if (tip > 0) 'tipBalance': FieldValue.increment(tip),
         ...clock,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -699,6 +782,27 @@ class DeliveryPartnerService {
     return _merge(partnerId, {
       'pocketBalance': FieldValue.increment(delta),
       if (tipDelta != 0) 'tipBalance': FieldValue.increment(tipDelta),
+    });
+  }
+
+  /// Writes the exact tipBalance computed from order history and adjusts
+  /// pocketBalance by [pocketAdjustment] in the same atomic write.
+  /// Used by the earnings screen to auto-fix historical tip crediting.
+  static Future<void> setTipBalance({
+    required String partnerId,
+    required int tipBalance,
+    required int pocketAdjustment,
+  }) async {
+    final ref = _partners.doc(partnerId);
+    await _db.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      final current = snap.data() ?? {};
+      final currentPocket = (current['pocketBalance'] as num? ?? 0).toInt();
+      tx.update(ref, {
+        'tipBalance': tipBalance,
+        'pocketBalance': (currentPocket + pocketAdjustment).clamp(0, 99999999),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
   }
 

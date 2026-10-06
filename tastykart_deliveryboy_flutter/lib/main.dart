@@ -11,7 +11,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'constants/app_constants.dart';
 import 'constants/color_constants.dart';
 import 'screens/auth_gate.dart';
+import 'services/audio_service.dart';
 import 'services/fcm_service.dart';
+import 'services/force_update_service.dart';
 import 'state/onboarding_controller.dart';
 import 'utils/app_navigation.dart';
 
@@ -86,6 +88,9 @@ void main() async {
     sound: true,
   );
 
+  // Initialize audio service for buzzer/notification sounds
+  await AudioService.initialize();
+
   runApp(const TastyKartDeliveryApp());
 }
 
@@ -98,6 +103,15 @@ class TastyKartDeliveryApp extends StatefulWidget {
 
 class _TastyKartDeliveryAppState extends State<TastyKartDeliveryApp> {
   final OnboardingController _onboarding = OnboardingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Check for force-update after the first frame so the navigator is ready.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ForceUpdateService.start();
+    });
+  }
 
   @override
   void dispose() {

@@ -29,8 +29,17 @@ class _SelectCityScreenState extends State<SelectCityScreen> {
   void initState() {
     super.initState();
     _selected = widget.initialCity?.trim().isNotEmpty == true
-        ? widget.initialCity
+        ? widget.initialCity!.trim()
         : null;
+  }
+
+  @override
+  void didUpdateWidget(covariant SelectCityScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialCity != widget.initialCity &&
+        widget.initialCity?.trim().isNotEmpty == true) {
+      _selected = widget.initialCity!.trim();
+    }
   }
 
   Future<void> _onNext() async {
@@ -80,15 +89,7 @@ class _SelectCityScreenState extends State<SelectCityScreen> {
   Widget build(BuildContext context) {
     final r = Responsive.of(context);
 
-    final inset = MediaQuery.viewPaddingOf(context);
-
-    return MediaQuery.removePadding(
-      context: context,
-      removeTop: true,
-      removeBottom: true,
-      child: Padding(
-        padding: EdgeInsets.only(top: inset.top, bottom: inset.bottom),
-        child: OnboardingScaffold(
+    return OnboardingScaffold(
         buttonLabel: 'Next',
         isLoading: _isLoading || _leaving,
         buttonEnabled: !_leaving,
@@ -127,6 +128,7 @@ class _SelectCityScreenState extends State<SelectCityScreen> {
                         onTap: () {
                           AppFeedback.selection();
                           setState(() => _selected = city);
+                          OnboardingScope.maybeOf(context)?.setCity(city);
                         },
                       );
                     },
@@ -136,8 +138,6 @@ class _SelectCityScreenState extends State<SelectCityScreen> {
             ),
           ],
         ),
-        ),
-      ),
     );
   }
 }

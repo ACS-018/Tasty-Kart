@@ -392,7 +392,6 @@ class _TripCardState extends State<_TripCard> {
     final dropTime = order.deliveredAt ?? order.sortTime;
     final own = order.deliveryPartnerId == partnerId;
     final payout = own && order.isDelivered ? order.payout : 0;
-    final collected = own ? order.collectedMoney : 0;
     final pickupName = order.restaurantName.isEmpty
         ? 'Restaurant'
         : order.restaurantName;
@@ -475,7 +474,10 @@ class _TripCardState extends State<_TripCard> {
                 value: rupee(order.isDelivered && own ? order.deliveryFee : 0),
               ),
               const SizedBox(height: 6),
-              _BreakdownRow(label: 'Order Total', value: rupee(order.total)),
+              _BreakdownRow(
+                label: 'Order Amount',
+                value: rupee(order.total + order.walletUsed),
+              ),
               const SizedBox(height: 6),
               if (order.tip > 0) ...[
                 _BreakdownRow(
@@ -485,7 +487,35 @@ class _TripCardState extends State<_TripCard> {
                 ),
                 const SizedBox(height: 6),
               ],
-              _BreakdownRow(label: 'Collected (Cash)', value: rupee(collected)),
+              if (order.paymentMethod.isNotEmpty) ...[
+                _BreakdownRow(
+                  label: 'Payment',
+                  value: order.walletUsed > 0 && !order.isOnlinePaid
+                      ? 'COD + Wallet'
+                      : order.isOnlinePaid
+                      ? 'Online'
+                      : 'Cash on Delivery',
+                ),
+                const SizedBox(height: 6),
+              ],
+              if (!order.isOnlinePaid && own) ...[
+                _BreakdownRow(
+                  label: 'Cash Collected',
+                  value: rupee(order.total),
+                  valueColor: order.total > 0
+                      ? AppColors.primary
+                      : AppColors.textMedium,
+                ),
+                if (order.walletUsed > 0) ...[
+                  const SizedBox(height: 6),
+                  _BreakdownRow(
+                    label: 'Wallet Paid',
+                    value: rupee(order.walletUsed),
+                    valueColor: const Color(0xFF1565C0),
+                  ),
+                ],
+                const SizedBox(height: 6),
+              ],
               if (order.tripKm > 0) ...[
                 const SizedBox(height: 6),
                 _BreakdownRow(

@@ -9,17 +9,37 @@ import '../../utils/formatters.dart';
 import '../../widgets/async_state_message.dart';
 import '../../widgets/page_header.dart';
 
-class NotificationsScreen extends StatelessWidget {
+class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({
     super.key,
     required this.partnerId,
     this.notificationsEnabled = true,
+    this.registeredAt,
   });
 
   final String partnerId;
+
   /// Whether this partner has opted into push notifications.
   /// Broadcast notifications are hidden when this is false.
   final bool notificationsEnabled;
+
+  /// When this partner registered. Broadcast notifications created before
+  /// this date are hidden so new partners don't see old global messages.
+  final DateTime? registeredAt;
+
+  @override
+  State<NotificationsScreen> createState() => _NotificationsScreenState();
+}
+
+class _NotificationsScreenState extends State<NotificationsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Mark all notifications as read when screen opens
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      NotificationService.markAllAsRead(widget.partnerId);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,10 +50,12 @@ class NotificationsScreen extends StatelessWidget {
           const PageHeader(title: 'Notifications'),
           Expanded(
             child: StreamBuilder<List<AppNotification>>(
-              stream: NotificationService.watchInbox(),
+              stream: NotificationService.watchInbox(
+                registeredAt: widget.registeredAt,
+              ),
               builder: (context, inboxSnap) {
                 return StreamBuilder<List<DeliveryOrder>>(
-                  stream: OrderService.watchForPartner(partnerId),
+                  stream: OrderService.watchForPartner(widget.partnerId),
                   builder: (context, orderSnap) {
                     final waiting =
                         inboxSnap.connectionState == ConnectionState.waiting &&
@@ -45,10 +67,11 @@ class NotificationsScreen extends StatelessWidget {
                     }
 
                     final notes = NotificationService.visibleForPartner(
-                      partnerId: partnerId,
+                      partnerId: widget.partnerId,
                       inbox: inboxSnap.data ?? const [],
                       orders: orderSnap.data ?? const [],
-                      notificationsEnabled: notificationsEnabled,
+                      notificationsEnabled: widget.notificationsEnabled,
+                      registeredAt: widget.registeredAt,
                     );
 
                     if (notes.isEmpty) {
@@ -128,10 +151,7 @@ class _NotificationCard extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             formatTimeAgo(note.createdAt),
-            style: const TextStyle(
-              fontSize: 11,
-              color: Color(0xFF9E9E9E),
-            ),
+            style: const TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
           ),
         ],
       ),

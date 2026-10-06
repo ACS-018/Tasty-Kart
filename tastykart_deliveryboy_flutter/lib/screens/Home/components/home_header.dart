@@ -5,6 +5,7 @@ import '../../../constants/color_constants.dart';
 import '../../../models/delivery_partner.dart';
 import '../../../services/delivery_partner_service.dart';
 import '../../../services/location_service.dart';
+import '../../../services/notification_service.dart';
 import '../../../services/settings_service.dart';
 import '../../../utils/app_feedback.dart';
 import '../../../utils/app_navigation.dart';
@@ -45,7 +46,7 @@ class _HomeHeaderState extends State<HomeHeader> {
           if (mounted) {
             AppFeedback.showError(
               context,
-              'Cash limit reached. Pay your cash in hand to TastyKart to go online.',
+              'Cash limit exceeded. Pay the excess cash above your limit to go online.',
             );
             await AppNavigation.push(
               context,
@@ -69,18 +70,36 @@ class _HomeHeaderState extends State<HomeHeader> {
           return;
         }
 
-        // 2. Set Firestore status online.
+        // 2. Set Firestore status online — fetch the last known GPS position
+        //    first so currentLat/currentLng land in the same Firestore write.
+        //    This eliminates the window where status='online' but coords are
+        //    null, which caused the admin auto-assigner to skip this partner.
+        double? lat;
+        double? lng;
+        try {
+          final pos = await LocationService.getCurrentPosition();
+          if (pos != null) {
+            lat = pos.latitude;
+            lng = pos.longitude;
+          }
+        } catch (_) {
+          // Non-fatal — proceed without coords; background tracking will
+          // write them within 30 s.
+        }
+
         try {
           await DeliveryPartnerService.setOnline(
             partnerId: widget.partner.id,
             online: true,
             currentStatus: widget.partner.status,
+            lat: lat,
+            lng: lng,
           );
         } on CashLimitException {
           if (mounted) {
             AppFeedback.showError(
               context,
-              'Cash limit reached. Pay your cash in hand to TastyKart to go online.',
+              'Cash limit exceeded. Pay the excess cash above your limit to go online.',
             );
             await AppNavigation.push(
               context,
@@ -151,13 +170,25 @@ class _HomeHeaderState extends State<HomeHeader> {
                 onTap: () => SosSheet.show(context),
               ),
               const SizedBox(width: 4),
-              // Notifications
-              _HeaderIconButton(
-                icon: Icons.notifications_outlined,
-                onTap: () => AppNavigation.push(
-                  context,
-                  NotificationsScreen(partnerId: widget.partner.id, notificationsEnabled: widget.partner.notificationsEnabled),
-                ),
+              // Notifications with badge
+              StreamBuilder<int>(
+                stream: NotificationService.watchUnreadCount(widget.partner.id),
+                builder: (context, snapshot) {
+                  final unreadCount = snapshot.data ?? 0;
+                  return _HeaderIconButton(
+                    icon: Icons.notifications_outlined,
+                    badgeCount: unreadCount,
+                    onTap: () => AppNavigation.push(
+                      context,
+                      NotificationsScreen(
+                        partnerId: widget.partner.id,
+                        notificationsEnabled:
+                            widget.partner.notificationsEnabled,
+                        registeredAt: widget.partner.createdAt,
+                      ),
+                    ),
+                  );
+                },
               ),
               const SizedBox(width: 6),
               _Avatar(url: widget.partner.avatar, name: widget.partner.name),
@@ -410,34 +441,67 @@ class _HeaderIconButton extends StatelessWidget {
     this.icon,
     this.label,
     this.isText = false,
+    this.badgeCount = 0,
     required this.onTap,
   });
 
   final IconData? icon;
   final String? label;
   final bool isText;
+  final int badgeCount;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: AppColors.white.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: isText
-            ? Text(
-                label ?? '',
-                style: const TextStyle(
-                  color: AppColors.white,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppColors.white.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: isText
+                ? Text(
+                    label ?? '',
+                    style: const TextStyle(
+                      color: AppColors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                    ),
+                  )
+                : Icon(icon, color: AppColors.white, size: 20),
+          ),
+          // Badge indicator
+          if (badgeCount > 0)
+            Positioned(
+              top: -4,
+              right: -4,
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF3D00),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.primary, width: 1.5),
                 ),
-              )
-            : Icon(icon, color: AppColors.white, size: 20),
+                child: Center(
+                  child: Text(
+                    badgeCount > 99 ? '99+' : '$badgeCount',
+                    style: const TextStyle(
+                      color: AppColors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

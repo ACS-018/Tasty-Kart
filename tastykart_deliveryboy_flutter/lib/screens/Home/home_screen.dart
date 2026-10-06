@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-
 import '../../constants/color_constants.dart';
 import '../../models/delivery_order.dart';
 import '../../models/delivery_partner.dart';
@@ -41,6 +40,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   StreamSubscription<PlatformSettings>? _settingsSub;
   bool _enforcingCash = false;
   final Set<String> _returnedOrders = {};
+
+  // ── User-cancellation tracking ─────────────────────────────────────────────
+  /// Order IDs we have already handled a user-cancellation for, so we only
+  /// reset the partner to online once per cancellation event.
+  final Set<String> _handledUserCancels = {};
+
+  // ── Admin / restaurant cancellation tracking ───────────────────────────────
+  /// Order IDs we have already handled an admin- or restaurant-cancellation
+  /// for, so we only reset the partner to online once per event.
+  final Set<String> _handledAdminCancels = {};
+
+  // ── Heartbeat timer ────────────────────────────────────────────────────────
+  /// Writes `lastSeen` to Firestore every 3 minutes while the partner is
+  /// online. The Cloud Function `autoOfflineStalePartners` marks partners
+  /// offline when `lastSeen` is older than 10 minutes — catching uninstalls,
+  /// force-kills, and battery deaths.
+  Timer? _heartbeatTimer;
+  static const _heartbeatInterval = Duration(minutes: 3);
 
   @override
   void initState() {
@@ -88,13 +105,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _syncTracking(widget.partner);
       _enforceCashLimit();
+      // Write an immediate heartbeat on resume so lastSeen is fresh
+      if (widget.partner.isOnline) {
+        DeliveryPartnerService.writeHeartbeat(widget.partner.id);
+      }
     }
   }
 
   bool _overCashLimit(DeliveryPartner partner) {
     final adminLimit = _adminCashLimit;
     if (adminLimit == null && partner.cashLimit <= 0) return false;
-    return partner.cashLimitExceeded(partner.effectiveCashLimit(adminLimit ?? 0));
+    return partner.cashLimitExceeded(
+      partner.effectiveCashLimit(adminLimit ?? 0),
+    );
   }
 
   /// Takes the partner offline if they are online with cash in hand at or above
@@ -133,9 +156,55 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// Called when Firestore tells us the active trip order was cancelled by the
+  /// customer. Resets the partner to online exactly once per order so they can
+  /// receive new assignments immediately.
+  Future<void> _handleUserCancelledOrder(DeliveryOrder order) async {
+    if (!_handledUserCancels.add(order.id)) return; // already handled
+    try {
+      await DeliveryPartnerService.setAvailable(partnerId: widget.partner.id);
+    } catch (_) {
+      // Best-effort — reconciler on admin panel will catch any stale BUSY.
+    }
+    if (mounted) {
+      AppFeedback.showSnackBar(
+        context,
+        message:
+            '⚠️ Order ${order.displayOrderNumber} was cancelled by the customer. '
+            'Do NOT pick up this order. You are now online.',
+        backgroundColor: AppColors.primary,
+        duration: const Duration(seconds: 6),
+      );
+    }
+  }
+
+  /// Called when Firestore tells us an accepted order was cancelled by the
+  /// admin or restaurant (i.e. NOT by the customer and NOT by the partner
+  /// themselves). Resets the partner to online immediately so they can receive
+  /// new assignments.
+  Future<void> _handleAdminCancelledOrder(DeliveryOrder order) async {
+    if (!_handledAdminCancels.add(order.id)) return; // already handled
+    try {
+      await DeliveryPartnerService.setAvailable(partnerId: widget.partner.id);
+    } catch (_) {
+      // Best-effort — reconciler on admin panel will catch any stale BUSY.
+    }
+    if (mounted) {
+      AppFeedback.showSnackBar(
+        context,
+        message:
+            '⚠️ Order ${order.displayOrderNumber} was cancelled by the restaurant/admin. '
+            'You are now online and available for new orders.',
+        backgroundColor: AppColors.primary,
+        duration: const Duration(seconds: 6),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _settingsSub?.cancel();
+    _stopHeartbeat();
     WidgetsBinding.instance.removeObserver(this);
     // Stop tracking when the screen is permanently removed (e.g. logout).
     LocationService.stopBackgroundTracking();
@@ -151,9 +220,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (nowOnline) {
       LocationService.startBackgroundTracking(partnerId: partner.id);
+      _startHeartbeat(partner.id);
     } else {
       LocationService.stopBackgroundTracking();
+      _stopHeartbeat();
     }
+  }
+
+  void _startHeartbeat(String partnerId) {
+    _heartbeatTimer?.cancel();
+    // Write an immediate heartbeat, then every 3 minutes.
+    DeliveryPartnerService.writeHeartbeat(partnerId);
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
+      if (widget.partner.isOnline) {
+        DeliveryPartnerService.writeHeartbeat(partnerId);
+      } else {
+        _stopHeartbeat();
+      }
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
   }
 
   @override
@@ -181,6 +270,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           );
         }
         final incoming = overLimit ? null : assigned;
+
+        // ── User-cancellation detection ──────────────────────────────────
+        // If the partner currently has an active trip and Firestore just
+        // flipped it to cancelled-by-user, reset them to online immediately.
+        final activeForCancelCheck = OrderService.activeTripFor(orders);
+        if (activeForCancelCheck != null &&
+            activeForCancelCheck.isUserCancelled) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _handleUserCancelledOrder(activeForCancelCheck),
+          );
+        }
+        // ────────────────────────────────────────────────────────────────
+
+        // ── Admin / restaurant-cancellation detection ────────────────────
+        // activeTripFor() returns null once isCancelled==true, so we scan
+        // all orders for one that: was accepted by this partner, is now
+        // cancelled, and was NOT cancelled by the partner themselves (those
+        // paths already call setAvailable directly).
+        DeliveryOrder? adminCancelled;
+        for (final o in orders) {
+          if (o.partnerAccepted &&
+              o.isCancelled &&
+              !o.isUserCancelled &&
+              o.cancelledBy != 'delivery_partner' &&
+              !_handledAdminCancels.contains(o.id) &&
+              !_handledUserCancels.contains(o.id)) {
+            adminCancelled = o;
+            break;
+          }
+        }
+        if (adminCancelled != null) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _handleAdminCancelledOrder(adminCancelled!),
+          );
+        }
+        // ────────────────────────────────────────────────────────────────
+
         final active = incoming == null
             ? OrderService.activeTripFor(orders)
             : null;

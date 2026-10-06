@@ -39,15 +39,44 @@ class _PersonalDetailsScreenState extends State<PersonalDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    _nameCtrl = TextEditingController(text: widget.initialName ?? '');
-    _dobCtrl = TextEditingController(text: widget.initialDob ?? '');
+    _nameCtrl = TextEditingController(text: widget.initialName?.trim() ?? '');
+    _dobCtrl = TextEditingController(text: widget.initialDob?.trim() ?? '');
     _gender = widget.initialGender?.trim().isNotEmpty == true
-        ? widget.initialGender
+        ? widget.initialGender!.trim()
         : null;
+    _nameCtrl.addListener(_persistDraftToSession);
+    _dobCtrl.addListener(_persistDraftToSession);
+  }
+
+  @override
+  void didUpdateWidget(covariant PersonalDetailsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialName != widget.initialName &&
+        widget.initialName?.trim().isNotEmpty == true) {
+      _nameCtrl.text = widget.initialName!.trim();
+    }
+    if (oldWidget.initialDob != widget.initialDob &&
+        widget.initialDob?.trim().isNotEmpty == true) {
+      _dobCtrl.text = widget.initialDob!.trim();
+    }
+    if (oldWidget.initialGender != widget.initialGender &&
+        widget.initialGender?.trim().isNotEmpty == true) {
+      _gender = widget.initialGender!.trim();
+    }
+  }
+
+  void _persistDraftToSession() {
+    OnboardingScope.maybeOf(context)?.setPersonalDetails(
+          name: _nameCtrl.text,
+          dob: _dobCtrl.text,
+          selectedGender: _gender ?? '',
+        );
   }
 
   @override
   void dispose() {
+    _nameCtrl.removeListener(_persistDraftToSession);
+    _dobCtrl.removeListener(_persistDraftToSession);
     _nameCtrl.dispose();
     _dobCtrl.dispose();
     super.dispose();
@@ -77,7 +106,8 @@ class _PersonalDetailsScreenState extends State<PersonalDetailsScreen> {
       },
     );
     if (picked != null) {
-      _dobCtrl.text = _formatDate(picked);
+      setState(() => _dobCtrl.text = _formatDate(picked));
+      _persistDraftToSession();
     }
   }
 
@@ -99,11 +129,10 @@ class _PersonalDetailsScreenState extends State<PersonalDetailsScreen> {
     try {
       final name = _nameCtrl.text.trim();
       final dob = _dobCtrl.text.trim();
-      OnboardingScope.maybeOf(
-        context,
-      )?.setPersonalDetails(name: name, dob: dob, selectedGender: _gender!);
+      _persistDraftToSession();
+      final partnerId = await DeliveryPartnerService.docIdFor(user);
       await DeliveryPartnerService.updatePersonalDetails(
-        partnerId: user.uid,
+        partnerId: partnerId,
         name: name,
         dateOfBirth: dob,
         gender: _gender!,
@@ -119,12 +148,14 @@ class _PersonalDetailsScreenState extends State<PersonalDetailsScreen> {
   /// Go back to the city selection step by clearing the stored city so
   /// AuthGate re-evaluates and shows SelectCityScreen.
   Future<void> _onBack() async {
+    if (_isLoading) return;
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
       return;
     }
     final user = AuthService.currentUser;
     if (user == null) return;
+    _persistDraftToSession();
     try {
       final partnerId = await DeliveryPartnerService.docIdFor(user);
       if (!mounted) return;
@@ -226,6 +257,7 @@ class _PersonalDetailsScreenState extends State<PersonalDetailsScreen> {
                     onTap: () {
                       AppFeedback.selection();
                       setState(() => _gender = g);
+                      _persistDraftToSession();
                     },
                   );
                 }).toList(),

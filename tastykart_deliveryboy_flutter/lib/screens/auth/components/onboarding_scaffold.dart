@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../constants/color_constants.dart';
 import '../../../global_widgets/app_button.dart';
@@ -28,32 +29,58 @@ class OnboardingScaffold extends StatelessWidget {
     final horizontal = r.responsive(mobile: 24.0, tablet: 40.0, desktop: 48.0);
     final bottom = r.responsive(mobile: 20.0, tablet: 28.0, desktop: 32.0);
 
-    return Scaffold(
-      backgroundColor: AppColors.white,
-      resizeToAvoidBottomInset: true,
-      body: SafeArea(
-        child: Column(
+    final topInset = MediaQuery.paddingOf(context).top;
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light.copyWith(
+        statusBarColor: AppColors.primary,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarColor: AppColors.primary,
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+      child: Scaffold(
+        backgroundColor: AppColors.primary,
+        resizeToAvoidBottomInset: true,
+        body: Column(
           children: [
-            if (header != null)
-              ColoredBox(
-                color: AppColors.illustrationBackground,
-                child: header,
-              ),
+            SizedBox(height: topInset),
             Expanded(
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(horizontal, 8, horizontal, 0),
-                child: child,
-              ),
-            ),
-            if (buttonLabel != null)
-              Padding(
-                padding: EdgeInsets.fromLTRB(horizontal, 12, horizontal, bottom),
-                child: AppButton(
-                  label: buttonLabel!,
-                  onPressed: buttonEnabled && !isLoading ? onPressed : null,
-                  isLoading: isLoading,
+              child: ColoredBox(
+                color: AppColors.white,
+                child: Column(
+                  children: [
+                    if (header != null)
+                      ColoredBox(
+                        color: AppColors.illustrationBackground,
+                        child: header,
+                      ),
+                    Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(horizontal, 8, horizontal, 0),
+                        child: child,
+                      ),
+                    ),
+                    if (buttonLabel != null)
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          horizontal,
+                          12,
+                          horizontal,
+                          bottom,
+                        ),
+                        child: AppButton(
+                          label: buttonLabel!,
+                          onPressed:
+                              buttonEnabled && !isLoading ? onPressed : null,
+                          isLoading: isLoading,
+                        ),
+                      ),
+                  ],
                 ),
               ),
+            ),
+            SizedBox(height: bottomInset),
           ],
         ),
       ),

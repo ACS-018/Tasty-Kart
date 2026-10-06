@@ -79,6 +79,8 @@ class TransactionService {
     required int amount,
     required String upiId,
     String phone = '',
+    int pocketAmount = 0,
+    int tipAmount = 0,
   }) async {
     final settings = await SettingsService.getSettings(forceRefresh: true);
     final minAmount = settings.deliveryPartner.withdrawalMinAmount;
@@ -93,6 +95,12 @@ class TransactionService {
     final now = FieldValue.serverTimestamp();
     final requestedAt = DateTime.now().toIso8601String();
 
+    final fromPocket = pocketAmount > 0 ? pocketAmount : amount;
+    final fromTips = tipAmount > 0 ? tipAmount : 0;
+    final remarks = fromTips > 0
+        ? 'Awaiting admin approval (Pocket ₹$fromPocket + Tips ₹$fromTips)'
+        : 'Awaiting admin approval';
+
     await _txs.doc(id).set({
       'id': id,
       'partnerId': partnerId,
@@ -100,6 +108,8 @@ class TransactionService {
       'type': 'payout',
       'title': 'UPI Withdrawal → $upiId',
       'amount': amount,
+      'pocketAmount': fromPocket,
+      'tipAmount': fromTips,
       'method': 'upi',
       'upiId': upiId,
       'status': 'pending',
@@ -108,7 +118,7 @@ class TransactionService {
       'orderNumber': '',
       'balanceBefore': 0,
       'balanceAfter': 0,
-      'remarks': 'Awaiting admin approval',
+      'remarks': remarks,
       'payoutRequestId': id,
       'createdAt': now,
       'processedAt': null,
@@ -122,6 +132,8 @@ class TransactionService {
         'partnerName': partnerName,
         'phone': phone,
         'requestedAmount': amount,
+        'pocketAmount': fromPocket,
+        'tipAmount': fromTips,
         'requestedAt': requestedAt,
         'status': 'PENDING',
         'upiId': upiId,

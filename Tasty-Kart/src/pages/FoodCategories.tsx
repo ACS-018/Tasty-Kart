@@ -317,23 +317,13 @@ export function FoodCategories() {
       header: 'Restaurants',
       accessorFn: (row) => String(row.restaurants.length),
       cell: ({ row }) => (
-        <div className="max-w-[240px]">
+        <div className="flex items-center gap-3">
           <p className="text-sm font-semibold text-gray-900">{row.original.restaurants.length}</p>
-          <p className="text-xs text-gray-500 truncate">{row.original.restaurants.map(restaurant => restaurant.name).join(', ')}</p>
-        </div>
-      ),
-    },
-    {
-      accessorKey: 'itemCount',
-      header: 'Items',
-      cell: ({ row }) => (
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{row.original.itemCount}</span>
-          {row.original.itemCount > 0 && (
+          {row.original.restaurants.length > 0 && (
             <button
               type="button"
               onClick={() => setViewGroup(row.original)}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-[#B32B2C] bg-red-50 hover:bg-red-100 transition-colors"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#B32B2C] bg-red-50 hover:bg-red-100 transition-colors"
             >
               <Eye size={13} /> View
             </button>
@@ -485,49 +475,66 @@ export function FoodCategories() {
       <Modal
         open={!!viewGroup}
         onClose={() => setViewGroup(null)}
-        title={viewGroup ? `${viewGroup.name} · ${viewGroup.itemCount} item${viewGroup.itemCount === 1 ? '' : 's'}` : ''}
-        size="md"
+        title={viewGroup ? `${viewGroup.name} · Restaurants & Food Items` : ''}
+        size="lg"
       >
         {viewGroup && (
-          <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-            {viewGroup.restaurants.map(restaurant => {
-              const items = itemsFor(restaurant.categoryId, viewGroup.name, restaurant.id)
-              if (items.length === 0) return null
-              return (
-                <div key={restaurant.id}>
-                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
-                    {restaurant.name} ({items.length})
-                  </p>
-                  <div className="rounded-xl border border-gray-100 divide-y divide-gray-100">
-                    {items.map(item => {
-                      const price = Number(item.price) || 0
-                      const discounted = Number(item.discountedPrice) || 0
-                      const showDiscount = discounted > 0 && discounted < price
-                      return (
-                        <div key={item.id} className="flex items-center gap-3 px-3 py-2.5">
-                          {item.image ? (
-                            <img src={item.image} alt={item.name} className="w-10 h-10 rounded-lg object-cover bg-gray-100 shrink-0" />
-                          ) : (
-                            <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center shrink-0 text-lg">🍽️</div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-gray-900 truncate flex items-center gap-2">
-                              <span className={`w-2.5 h-2.5 rounded-sm border shrink-0 ${item.isVeg ? 'border-green-600 bg-green-500' : 'border-red-600 bg-red-500'}`} />
-                              {item.name}
-                            </p>
-                            {item.status === 'inactive' && <p className="text-xs text-gray-400">Inactive</p>}
-                          </div>
-                          <div className="text-right shrink-0">
-                            <p className="text-sm font-semibold text-gray-900">{formatCurrency(showDiscount ? discounted : price)}</p>
-                            {showDiscount && <p className="text-xs text-gray-400 line-through">{formatCurrency(price)}</p>}
-                          </div>
-                        </div>
-                      )
-                    })}
+          <div className="space-y-4 max-h-[65vh] overflow-y-auto">
+            {viewGroup.restaurants.length === 0 ? (
+              <p className="text-sm text-gray-500 text-center py-8">No restaurants assigned to this category</p>
+            ) : (
+              viewGroup.restaurants.map(restaurant => {
+                const items = itemsFor(restaurant.categoryId, viewGroup.name, restaurant.id)
+                return (
+                  <div key={restaurant.id} className="rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
+                      <p className="text-sm font-bold text-gray-900">{restaurant.name}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {items.length} food item{items.length === 1 ? '' : 's'} in this category
+                      </p>
+                    </div>
+                    {items.length === 0 ? (
+                      <div className="px-4 py-6 text-center">
+                        <p className="text-sm text-gray-400">No food items yet</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-gray-100">
+                        {items.map(item => {
+                          const price = Number(item.price) || 0
+                          const discounted = Number(item.discountedPrice) || 0
+                          const showDiscount = discounted > 0 && discounted < price
+                          return (
+                            <div key={item.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors">
+                              {item.image ? (
+                                <img src={item.image} alt={item.name} className="w-12 h-12 rounded-lg object-cover bg-gray-100 shrink-0 border border-gray-200" />
+                              ) : (
+                                <div className="w-12 h-12 rounded-lg bg-amber-50 flex items-center justify-center shrink-0 text-xl border border-gray-200">🍽️</div>
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                                  <span className={`w-2.5 h-2.5 rounded-sm border shrink-0 ${item.isVeg ? 'border-green-600 bg-green-500' : 'border-red-600 bg-red-500'}`} />
+                                  {item.name}
+                                </p>
+                                {item.description && (
+                                  <p className="text-xs text-gray-500 line-clamp-1 mt-0.5">{item.description}</p>
+                                )}
+                                {item.status === 'inactive' && (
+                                  <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">Inactive</span>
+                                )}
+                              </div>
+                              <div className="text-right shrink-0">
+                                <p className="text-sm font-bold text-gray-900">{formatCurrency(showDiscount ? discounted : price)}</p>
+                                {showDiscount && <p className="text-xs text-gray-400 line-through">{formatCurrency(price)}</p>}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
-                </div>
-              )
-            })}
+                )
+              })
+            )}
           </div>
         )}
       </Modal>

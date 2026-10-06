@@ -177,19 +177,70 @@ service cloud.firestore {
          getPartnerDoc(request.auth.uid).city == resource.data.restaurantCity)
       ) || isAdmin() || true;  // 'true' allows public read for customer app
 
-      // Partners can update specific fields for their assigned orders
-      allow update: if (isPartner(resource.data.deliveryPartnerId) && 
-        isApprovedPartner(request.auth.uid) &&
-        request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['partnerAccepted', 'deliveryStage', 'status', 'pickedAt', 
-                   'deliveredAt', 'collectedVia', 'deniedPartnerId', 'updatedAt']) &&
-        (
-          (resource.data.status == 'ready' && request.resource.data.status == 'picked') ||
-          (resource.data.status == 'picked' && request.resource.data.status == 'delivered') ||
-          (resource.data.status in ['accepted', 'preparing', 'ready'] && 
-           request.resource.data.status == 'cancelled' && 
-           request.resource.data.cancelledBy == request.auth.uid)
-        )) || isAdmin() || true;
+      // ── Customer-initiated cancellation (before pickup) ──
+      // Allows the order owner to cancel when status is still pre-pickup.
+      // Only specific cancellation fields may be written; payment/items/totals are locked.
+      function isPrePickupStatus() {
+        return resource.data.status in ['pending', 'accepted', 'preparing'];
+      }
+
+      function isCustomerCancellationWrite() {
+        let allowedKeys = [
+          'status', 'cancelledBy', 'cancellationSource', 'cancelReason',
+          'userCancelledAt', 'refundEligible', 'refundStatus', 'timeline',
+          'updatedAt', 'deliveryPartnerId', 'deliveryPartnerName',
+          'partnerAccepted', 'deliveryStage'
+        ];
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedKeys)
+          && request.resource.data.status == 'cancelled'
+          && request.resource.data.cancelledBy == 'user'
+          && request.resource.data.cancellationSource == 'user';
+      }
+
+      allow update: if
+        // Case 1: Customer cancels their own order before pickup
+        (isSignedIn()
+          && resource.data.customerId == request.auth.uid
+          && isPrePickupStatus()
+          && isCustomerCancellationWrite()
+        )
+        ||
+        // Case 2: Delivery partner updates specific fields on their assigned order
+        (isPartner(resource.data.deliveryPartnerId) && 
+          isApprovedPartner(request.auth.uid) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['partnerAccepted', 'deliveryStage', 'status', 'pickedAt', 
+                     'deliveredAt', 'collectedVia', 'deniedPartnerId', 'updatedAt',
+                     'deliveryPartnerId', 'deliveryPartnerName', 'pickupCode',
+                     'partnerArrivedRestaurant', 'partnerArrivedCustomer',
+                     'deliveryOtp', 'deliveryProofUrl', 'timeline',
+                     'needsReassignment', 'excludedPartnerIds', 'deniedPartnerIds',
+                     'transferredAt', 'transferredByPartnerId', 'deniedAt',
+                     'cancelReason', 'cancelPhase', 'cancelledBy',
+                     'cancellationSource']) &&
+          (
+            // Partner accepts the assignment (pending/accepted → accepted)
+            (resource.data.status in ['pending', 'accepted', 'preparing'] &&
+             request.resource.data.status == 'accepted') ||
+            // Partner arrives at restaurant (accepted → preparing)
+            (resource.data.status == 'accepted' &&
+             request.resource.data.status == 'preparing') ||
+            // Restaurant-ready / pickup confirmed (preparing/accepted/ready → picked)
+            (resource.data.status in ['accepted', 'preparing', 'ready'] &&
+             request.resource.data.status == 'picked') ||
+            // Direct ready → picked transition
+            (resource.data.status == 'ready' && request.resource.data.status == 'picked') ||
+            // Delivery completed
+            (resource.data.status == 'picked' && request.resource.data.status == 'delivered') ||
+            // Partner cancels
+            (resource.data.status in ['pending', 'accepted', 'preparing', 'ready', 'picked'] && 
+             request.resource.data.status == 'cancelled')
+          )
+        )
+        ||
+        // Case 3: Admin can update anything
+        isAdmin()
+        || true;  // TODO: remove `true` before production; tighten rules
 
       // Signed-in customers can create their own orders (pre-write before Razorpay).
       allow create: if isSignedIn() || isAdmin();
@@ -345,6 +396,53 @@ service cloud.firestore {
       allow read: if true;
       allow create: if isSignedIn() || true;
       allow update, delete: if isAdmin() || true;
+    }
+
+    // ── Delivery partner support tickets (Help & Support in partner app) ──
+    match /supportTickets/{ticketId} {
+      allow read: if isSignedIn() && (
+        resource.data.partnerId == request.auth.uid || isAdmin()
+      );
+
+      allow create: if isSignedIn() &&
+        request.resource.data.partnerId == request.auth.uid &&
+        request.resource.data.source == 'delivery_partner';
+
+      allow update: if isAdmin() || (
+        isSignedIn() &&
+        resource.data.partnerId == request.auth.uid &&
+        request.resource.data.partnerId == resource.data.partnerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'updatedAt', 'lastMessage', 'lastSenderType', 'unreadByAdmin',
+          'unreadByPartner', 'partnerViewing', 'partnerViewingAt'
+        ])
+      );
+
+      allow delete: if isAdmin();
+
+      match /messages/{messageId} {
+        function ticketData() {
+          return get(/databases/$(database)/documents/supportTickets/$(ticketId)).data;
+        }
+
+        allow read: if isSignedIn() && (
+          ticketData().partnerId == request.auth.uid || isAdmin()
+        );
+
+        // Allow create when:
+        //   a) The partner is sending a message on their own ticket (ticket already exists), OR
+        //   b) The ticket is being created in the same batch (get() would fail on a non-existent
+        //      doc), so we trust that senderId == uid and senderType == 'partner'.
+        allow create: if isSignedIn() && (
+          (
+            request.resource.data.senderType == 'partner' &&
+            request.resource.data.senderId == request.auth.uid
+          ) ||
+          (isAdmin() && request.resource.data.senderType == 'admin')
+        );
+
+        allow update, delete: if isAdmin();
+      }
     }
 
     // ── Admin Platform Settings (includes delivery partner settings) ──

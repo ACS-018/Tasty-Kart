@@ -64,6 +64,23 @@ class _OnlineTrainingScreenState extends State<OnlineTrainingScreen> {
     } catch (_) {}
   }
 
+  /// Goes back to BankDetailsScreen by clearing the bank-detail fields in
+  /// Firestore.  AuthGate will re-route to BankDetailsScreen and pre-fill
+  /// the form from the saved values, so no data is lost.
+  Future<void> _goBack() async {
+    final user = AuthService.currentUser;
+    if (user == null) return;
+    setState(() => _isLoading = true);
+    try {
+      final partnerId = await DeliveryPartnerService.docIdFor(user);
+      await DeliveryPartnerService.clearBankDetails(partnerId: partnerId);
+    } catch (_) {
+      // Ignore — AuthGate will stay on training screen if the write fails.
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   Future<void> _onNext(List<_Module> modules) async {
     final allDone = modules.every((m) => _done.contains(m.id));
     if (!allDone) {
@@ -87,96 +104,73 @@ class _OnlineTrainingScreenState extends State<OnlineTrainingScreen> {
     }
   }
 
-  /// Back — clear bank details so AuthGate steps back to BankDetailsScreen.
-  Future<void> _onBack() async {
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
-      return;
-    }
-    final user = AuthService.currentUser;
-    if (user == null) return;
-    try {
-      final partnerId = await DeliveryPartnerService.docIdFor(user);
-      await DeliveryPartnerService.clearBankDetails(partnerId: partnerId);
-    } catch (_) {
-      if (!mounted) return;
-      AppFeedback.showError(context, 'Could not go back. Try again.');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final r = Responsive.of(context);
 
     return StreamBuilder<PlatformSettings>(
-        stream: SettingsService.watchSettings(),
-        builder: (context, snap) {
-          // Resolve modules: prefer admin Firestore list, fall back to
-          // AppConstants so the screen is never empty if settings haven't
-          // loaded or admin hasn't configured any modules yet.
-          final adminModules = snap.data?.deliveryPartner.trainingModules ?? [];
-          final modules = adminModules.isNotEmpty
-              ? adminModules
-                    .map(
-                      (m) => _Module(
-                        id: m.id,
-                        title: m.title,
-                        body: m.body,
-                        videoUrl: m.videoUrl,
-                      ),
-                    )
-                    .toList()
-              : AppConstants.trainingModules
-                    .map(
-                      (m) => _Module(id: m.id, title: m.title, body: m.body),
-                    )
-                    .toList();
+      stream: SettingsService.watchSettings(),
+      builder: (context, snap) {
+        // Resolve modules: prefer admin Firestore list, fall back to
+        // AppConstants so the screen is never empty if settings haven't
+        // loaded or admin hasn't configured any modules yet.
+        final adminModules = snap.data?.deliveryPartner.trainingModules ?? [];
+        final modules = adminModules.isNotEmpty
+            ? adminModules
+                  .map(
+                    (m) => _Module(
+                      id: m.id,
+                      title: m.title,
+                      body: m.body,
+                      videoUrl: m.videoUrl,
+                    ),
+                  )
+                  .toList()
+            : AppConstants.trainingModules
+                  .map((m) => _Module(id: m.id, title: m.title, body: m.body))
+                  .toList();
 
-          return OnboardingScaffold(
-            buttonLabel: 'Next',
-            isLoading: _isLoading,
-            onPressed: () => _onNext(modules),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                OnboardingTitleBlock(
-                  title: 'Online Training',
-                  subtitle: 'Complete The Training To Learn About Delivery',
-                  showBack: true,
-                  onBack: _onBack,
-                ),
-                SizedBox(
-                  height: r.responsive(
-                    mobile: 12.0,
-                    tablet: 16.0,
-                    desktop: 20.0,
-                  ),
-                ),
-                Expanded(
-                  child: ListView.separated(
-                    padding: EdgeInsets.zero,
-                    itemCount: modules.length,
-                    separatorBuilder: (_, __) =>
-                        const Divider(height: 1, color: AppColors.divider),
-                    itemBuilder: (context, index) {
-                      final module = modules[index];
-                      return OnboardingNavTile(
+        return OnboardingScaffold(
+          buttonLabel: 'Next',
+          isLoading: _isLoading,
+          onPressed: () => _onNext(modules),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              OnboardingTitleBlock(
+                title: 'Online Training',
+                subtitle: 'Complete The Training To Learn About Delivery',
+                showBack: true,
+                onBack: _goBack,
+              ),
+              SizedBox(
+                height: r.responsive(mobile: 12.0, tablet: 16.0, desktop: 20.0),
+              ),
+              Expanded(
+                child: ListView.separated(
+                  padding: EdgeInsets.zero,
+                  itemCount: modules.length,
+                  separatorBuilder: (_, __) =>
+                      const Divider(height: 1, color: AppColors.divider),
+                  itemBuilder: (context, index) {
+                    final module = modules[index];
+                    return OnboardingNavTile(
+                      title: module.title,
+                      completed: _done.contains(module.id),
+                      onTap: () => _openModule(
+                        id: module.id,
                         title: module.title,
-                        completed: _done.contains(module.id),
-                        onTap: () => _openModule(
-                          id: module.id,
-                          title: module.title,
-                          body: module.body,
-                          videoUrl: module.videoUrl,
-                        ),
-                      );
-                    },
-                  ),
+                        body: module.body,
+                        videoUrl: module.videoUrl,
+                      ),
+                    );
+                  },
                 ),
-              ],
-            ),
-          );
-        },
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

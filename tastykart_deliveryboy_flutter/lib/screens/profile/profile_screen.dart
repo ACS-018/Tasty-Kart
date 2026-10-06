@@ -115,7 +115,6 @@ class ProfileScreen extends StatelessWidget {
                               ),
                             ],
                           ),
-
                         ],
                       ),
                     ),
@@ -165,7 +164,53 @@ class ProfileScreen extends StatelessWidget {
                       iconBg: const Color(0xFFFCE8E8),
                       title: 'Log out',
                       onTap: () async {
-                        // Remove FCM token before signing out so no stale pushes.
+                        // Block logout if the partner is still online.
+                        // They must go offline first so no new orders are assigned.
+                        if (partner.isOnline) {
+                          await showDialog<void>(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              title: const Row(
+                                children: [
+                                  Icon(
+                                    Icons.warning_amber_rounded,
+                                    color: Colors.orange,
+                                    size: 24,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'You\'re Still Online',
+                                    style: TextStyle(fontSize: 16),
+                                  ),
+                                ],
+                              ),
+                              content: const Text(
+                                'Please go offline before logging out. '
+                                'Logging out while online may cause orders to be '
+                                'assigned to you that you cannot accept.',
+                                style: TextStyle(fontSize: 14, height: 1.5),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text(
+                                    'OK, Go Offline First',
+                                    style: TextStyle(
+                                      color: AppColors.primary,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                          return; // abort logout
+                        }
+
+                        // Partner is offline — safe to logout.
                         await FCMService.removeTokenFromFirestore(partner.id);
                         await AuthService.logout();
                       },
@@ -290,7 +335,6 @@ class _TodayStatsCardState extends State<_TodayStatsCard> {
               _stat(Icons.currency_rupee, rupee(widget.earnings), 'Earnings'),
             ],
           ),
-
         ],
       ),
     );

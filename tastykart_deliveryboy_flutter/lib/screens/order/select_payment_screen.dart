@@ -89,14 +89,21 @@ class _SelectPaymentScreenState extends State<SelectPaymentScreen> {
       );
       var cashLimitReached = false;
       if (_cash) {
+        // Only the order amount (items + tax + platform fee) belongs to
+        // TastyKart and goes into cashInHand.
+        // Delivery fee + tip belong to the partner and are credited separately
+        // to pocketBalance / tipBalance via completeTrip().
+        final orderAmount =
+            widget.order.total - widget.order.deliveryFee - widget.order.tip;
         cashLimitReached = await DeliveryPartnerService.recordCashCollected(
           partnerId: widget.partner.id,
-          amount: widget.order.total,
+          amount: orderAmount > 0 ? orderAmount : 0,
         );
       }
       await DeliveryPartnerService.completeTrip(
         partnerId: widget.partner.id,
         payout: widget.order.payout,
+        tip: widget.order.tip,
       );
       try {
         await TransactionService.add(
@@ -112,7 +119,7 @@ class _SelectPaymentScreenState extends State<SelectPaymentScreen> {
         AppFeedback.showSuccess(
           context,
           cashLimitReached
-              ? 'Delivery completed. Cash limit reached, so you are offline until you pay your cash in hand to TastyKart.'
+              ? 'Delivery completed. Cash limit exceeded — pay the excess above your limit to TastyKart to go online again.'
               : 'Delivery completed',
         );
         Navigator.of(context).pushAndRemoveUntil(
@@ -146,6 +153,12 @@ class _SelectPaymentScreenState extends State<SelectPaymentScreen> {
     final amount = rupee(widget.order.total);
     final upi = _upiPayload;
 
+    // Breakdown amounts
+    final orderAmt =
+        widget.order.total - widget.order.deliveryFee - widget.order.tip;
+    final deliveryFee = widget.order.deliveryFee;
+    final tip = widget.order.tip;
+
     return Scaffold(
       backgroundColor: AppColors.white,
       body: Column(
@@ -165,6 +178,204 @@ class _SelectPaymentScreenState extends State<SelectPaymentScreen> {
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
                     color: AppColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // ── Zomato-style money breakdown card ───────────────
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F9FA),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFE0E0E0)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'PAYMENT BREAKDOWN',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.8,
+                          color: Color(0xFF757575),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Total collected row
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Customer Pays',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textDark,
+                            ),
+                          ),
+                          Text(
+                            amount,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.textDark,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 16),
+
+                      // TastyKart's share
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFE65100),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              const Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Order Amount',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFFE65100),
+                                    ),
+                                  ),
+                                  Text(
+                                    'Goes to TastyKart (deposit when due)',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: Color(0xFFBF360C),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          Text(
+                            rupee(orderAmt > 0 ? orderAmt : 0),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFFE65100),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Delivery fee — partner's earnings
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF2E7D32),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              const Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Delivery Fee',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF2E7D32),
+                                    ),
+                                  ),
+                                  Text(
+                                    'Your earnings → Pocket Balance',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: Color(0xFF388E3C),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          Text(
+                            rupee(deliveryFee),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF2E7D32),
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      // Tip row — only show if tip > 0
+                      if (tip > 0) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFF6A1B9A),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Tip',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF6A1B9A),
+                                      ),
+                                    ),
+                                    Text(
+                                      'Customer tip → Tip Balance',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: Color(0xFF7B1FA2),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            Text(
+                              rupee(tip),
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF6A1B9A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 const SizedBox(height: 20),

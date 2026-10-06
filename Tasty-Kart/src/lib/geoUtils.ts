@@ -63,14 +63,21 @@ export function findNearestDeliveryPartner(
     return null
   }
 
-  // Filter partners who are online or available, and have current location
+  // Filter partners who are online/available, have a current location, are
+  // approved, and are NOT blocked.
+  // Use status !== 'blocked' as the authoritative signal — a partner whose
+  // blockedAt was not cleared (legacy doc) but whose status is 'online' is
+  // effectively unblocked and eligible.
   const validPartners = availablePartners.filter(
     (p) =>
       (p.status === 'online' || p.status === 'available') &&
+      p.status !== 'blocked' &&
+      p.status !== 'busy' &&
       p.currentLat &&
       p.currentLng &&
-      !p.blockedAt && // Exclude blocked partners
-      p.approved // Only approved partners
+      // Accept approved===true (boolean) OR approved as any truthy value
+      // to handle docs where admin wrote the string 'true' or a number 1.
+      (p.approved === true || p.approved === 'true' || p.approved === 1)
   )
 
   if (validPartners.length === 0) {
@@ -115,10 +122,11 @@ export function findNearestDeliveryPartners(
   const validPartners = availablePartners.filter(
     (p) =>
       (p.status === 'online' || p.status === 'available') &&
+      p.status !== 'blocked' &&
+      p.status !== 'busy' &&
       p.currentLat &&
       p.currentLng &&
-      !p.blockedAt &&
-      p.approved
+      p.approved === true
   )
 
   const partnersWithDistance = validPartners.map((partner) => ({

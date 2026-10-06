@@ -88,7 +88,7 @@ class _PayoutScreenState extends State<PayoutScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Available For Withdraw ${rupee(widget.partner.displayPocket)}',
+                    'Pocket ${rupee(widget.partner.displayPocket)} · Tips ${rupee(widget.partner.tipBalance)}',
                     style: const TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 16,
@@ -97,10 +97,11 @@ class _PayoutScreenState extends State<PayoutScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Last Updated  ${formatDayTime(DateTime.now())}',
+                    'Withdraw from pocket; you can include tips when requesting UPI payout. Last updated ${formatDayTime(DateTime.now())}',
                     style: const TextStyle(
                       fontSize: 12,
                       color: AppColors.textMedium,
+                      height: 1.35,
                     ),
                   ),
                 ],

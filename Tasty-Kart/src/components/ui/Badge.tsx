@@ -32,8 +32,10 @@ export function Badge({ variant = 'default', className, children, ...props }: Ba
 
 export function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; variant: BadgeProps['variant'] }> = {
-    pending:   { label: 'Pending',   variant: 'warning' },
-    accepted:  { label: 'Accepted',  variant: 'info' },
+    pending:          { label: 'Pending',          variant: 'warning' },
+    awaiting_payment: { label: 'Awaiting Payment', variant: 'warning' },
+    assigned:         { label: 'Assigned',          variant: 'warning' },
+    accepted:         { label: 'Accepted',          variant: 'info' },
     preparing: { label: 'Preparing', variant: 'info' },
     picked:    { label: 'Picked Up', variant: 'default' },
     delivered: { label: 'Delivered', variant: 'success' },

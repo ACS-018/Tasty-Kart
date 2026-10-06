@@ -6,17 +6,23 @@ enum TicketStatus { open, inProgress, closed }
 extension TicketStatusX on TicketStatus {
   String get value {
     switch (this) {
-      case TicketStatus.open:       return 'open';
-      case TicketStatus.inProgress: return 'in_progress';
-      case TicketStatus.closed:     return 'closed';
+      case TicketStatus.open:
+        return 'open';
+      case TicketStatus.inProgress:
+        return 'in_progress';
+      case TicketStatus.closed:
+        return 'closed';
     }
   }
 
   static TicketStatus fromString(String? s) {
     switch ((s ?? '').toLowerCase()) {
-      case 'in_progress': return TicketStatus.inProgress;
-      case 'closed':      return TicketStatus.closed;
-      default:            return TicketStatus.open;
+      case 'in_progress':
+        return TicketStatus.inProgress;
+      case 'closed':
+        return TicketStatus.closed;
+      default:
+        return TicketStatus.open;
     }
   }
 }
@@ -35,6 +41,22 @@ class SupportTicket {
   final DateTime? updatedAt;
   final DateTime? closedAt;
 
+  // ── Order linking (optional) ─────────────────────────────────────────────
+  /// Firestore order document ID — set when the ticket is about a specific order.
+  final String? orderId;
+
+  /// Human-readable order number (e.g. "ORD-1234567890").
+  final String? orderNumber;
+
+  /// Restaurant name for the linked order.
+  final String? orderRestaurantName;
+
+  /// Order status at the time the ticket was created.
+  final String? orderStatus;
+
+  /// Order total in rupees.
+  final int? orderTotal;
+
   const SupportTicket({
     required this.id,
     required this.partnerId,
@@ -48,6 +70,11 @@ class SupportTicket {
     this.createdAt,
     this.updatedAt,
     this.closedAt,
+    this.orderId,
+    this.orderNumber,
+    this.orderRestaurantName,
+    this.orderStatus,
+    this.orderTotal,
   });
 
   factory SupportTicket.fromDoc(DocumentSnapshot doc) {
@@ -65,6 +92,11 @@ class SupportTicket {
       createdAt: _ts(d['createdAt']),
       updatedAt: _ts(d['updatedAt']),
       closedAt: _ts(d['closedAt']),
+      orderId: d['orderId'] as String?,
+      orderNumber: d['orderNumber'] as String?,
+      orderRestaurantName: d['orderRestaurantName'] as String?,
+      orderStatus: d['orderStatus'] as String?,
+      orderTotal: (d['orderTotal'] as num?)?.toInt(),
     );
   }
 

@@ -105,9 +105,10 @@ interface PayoutRequest {
 // ============================================================================
 
 /**
- * Triggered when an order document changes status to 'COMPLETED'
- * Calculates earning based on delivery fee, earning rules, and multipliers
- * Creates wallet transaction and updates delivery partner balance
+ * Triggered when an order document changes status to 'DELIVERED'
+ * Calculates earning based on admin settings (baseFee + perKmRate × distance)
+ * Credits earnings to pocketBalance immediately
+ * Creates transaction record for transparency
  */
 export const onOrderCompleted = functions.firestore
   .document('orders/{orderId}')
@@ -116,107 +117,95 @@ export const onOrderCompleted = functions.firestore
     const after = change.after.data() as Order
     const orderId = context.params.orderId
 
-    // Only process if status changed to COMPLETED
-    if (before.status === 'COMPLETED' || after.status !== 'COMPLETED') {
+    // Only process if status changed to DELIVERED
+    if (before.status === 'delivered' || after.status !== 'delivered') {
       return null
     }
 
     try {
       const partnerId = after.deliveryPartnerId
       if (!partnerId) {
-        console.warn(`Order ${orderId} completed but no delivery partner assigned`)
+        console.warn(`Order ${orderId} delivered but no delivery partner assigned`)
         return null
       }
 
-      // Step 1: Fetch earning rules (ordered by priority)
-      const rulesSnapshot = await db
-        .collection('earningRules')
-        .where('isActive', '==', true)
-        .orderBy('priority', 'desc')
-        .limit(1)
-        .get()
-
-      if (rulesSnapshot.empty) {
-        console.error(`No active earning rules found for order ${orderId}`)
+      // Step 1: Fetch admin settings for earning calculation
+      const settingsSnap = await db.collection('settings').doc('admin').get()
+      if (!settingsSnap.exists) {
+        console.error(`Admin settings not found for order ${orderId}`)
         return null
       }
 
-      const rule = rulesSnapshot.docs[0].data() as EarningRule
+      const settings = settingsSnap.data()!
+      const baseFee = settings.deliveryPartner?.baseFee || 0
+      const perKmRate = settings.deliveryPartner?.perKmRate || 0
+      const distance = after.distance || 0
 
-      // Step 2: Calculate earning with multipliers
-      const isPeakHour = isPeakTime(after.completedAt || Timestamp.now())
-      const isNightHour = isNightTime(after.completedAt || Timestamp.now())
+      // Step 2: Calculate earning (baseFee + distance × perKmRate)
+      const distanceEarning = distance * perKmRate
+      const totalEarning = baseFee + distanceEarning
+      const tip = after.tip || 0
 
-      let multiplier = 1
-      if (isPeakHour && rule.peakHourMultiplier) multiplier *= rule.peakHourMultiplier
-      if (isNightHour && rule.nightMultiplier) multiplier *= rule.nightMultiplier
-
-      const finalEarning = rule.baseFee * multiplier
-
-      // Step 3: Create earning record
-      const earningDoc = await db.collection('earnings').add({
-        orderId,
-        deliveryPartnerId: partnerId,
-        baseEarning: rule.baseFee,
-        multiplier,
-        finalEarning,
-        ruleId: rule.id,
-        appliedAt: Timestamp.now(),
-      } as Earning)
-
-      // Step 4: Create wallet transaction with idempotency
-      const idempotencyKey = `order-${orderId}-earning`
-      const walletTxnRef = db
-        .collection('walletTransactions')
-        .doc(idempotencyKey)
+      // Step 3: Create transaction record with idempotency
+      const txnId = `order-${orderId}-earning`
+      const txnRef = db.collection('transactions').doc(txnId)
 
       await db.runTransaction(async (transaction) => {
-        const existingTxn = await transaction.get(walletTxnRef)
+        const existingTxn = await transaction.get(txnRef)
         if (existingTxn.exists) {
-          console.log(`Wallet transaction already exists for ${idempotencyKey}`)
+          console.log(`Transaction already exists for ${txnId}`)
           return
         }
 
-        transaction.set(walletTxnRef, {
-          id: idempotencyKey,
-          deliveryBoyId: partnerId,
-          type: 'ORDER_EARNING',
-          description: `Earning for order ${orderId}`,
-          amount: finalEarning,
-          direction: 'CREDIT',
+        // Create transaction record with breakdown
+        transaction.set(txnRef, {
+          id: txnId,
+          partnerId,
+          type: 'order_earning',
+          title: `Order #${orderId.slice(-6)} Delivery Fee`,
+          amount: totalEarning,
+          method: 'wallet',
+          status: 'completed',
           orderId,
-          earningId: earningDoc.id,
-          idempotencyKey,
+          breakdown: {
+            baseFee,
+            distanceFee: distanceEarning,
+            distance,
+            tip,
+          },
           createdAt: Timestamp.now(),
-        } as WalletTransaction)
+          processedAt: Timestamp.now(),
+        })
 
-        // Update partner wallet balance
+        // Credit earning to pocketBalance
         transaction.update(db.collection('deliveryPartners').doc(partnerId), {
-          totalEarnings: admin.firestore.FieldValue.increment(finalEarning),
-          walletBalance: admin.firestore.FieldValue.increment(finalEarning),
-          totalCompletedOrders: admin.firestore.FieldValue.increment(1),
+          pocketBalance: admin.firestore.FieldValue.increment(totalEarning),
+          earnings: admin.firestore.FieldValue.increment(totalEarning),
+          completedOrders: admin.firestore.FieldValue.increment(1),
           lastEarningAt: Timestamp.now(),
         })
       })
 
-      // Step 5: Log audit event
+      // Step 4: Log audit event
       await db.collection('adminAuditLog').add({
-        action: 'ORDER_EARNING_CALCULATED',
+        action: 'ORDER_EARNING_CREDITED',
         actor: 'SYSTEM',
         resourceType: 'ORDER',
         resourceId: orderId,
         changes: {
-          partnerEarning: finalEarning,
-          multiplier,
-          earningRuleId: rule.id,
+          partnerEarning: totalEarning,
+          baseFee,
+          distanceFee: distanceEarning,
+          distance,
+          tip,
         },
         timestamp: Timestamp.now(),
       })
 
-      console.log(`Earning calculated for order ${orderId}: ${finalEarning}`)
+      console.log(`Earning credited for order ${orderId}: ₹${totalEarning} (Base: ₹${baseFee} + Distance: ₹${distanceEarning})`)
       return null
     } catch (error) {
-      console.error(`Error calculating earning for order ${orderId}:`, error)
+      console.error(`Error crediting earning for order ${orderId}:`, error)
       throw error
     }
   })
@@ -531,6 +520,238 @@ export const calculatePartnerLevel = functions.https.onCall(async (data, context
 })
 
 // ============================================================================
+// SCHEDULED FUNCTION: Daily Target Bonus Credit
+// ============================================================================
+
+/**
+ * Runs daily at 00:01 to check previous day's earnings for each partner
+ * Credits dailyTargetBonus if partner met dailyTarget
+ */
+export const creditDailyTargetBonus = functions.pubsub
+  .schedule('1 0 * * *')
+  .timeZone('Asia/Kolkata')
+  .onRun(async () => {
+    try {
+      // Get admin settings for daily target config
+      const settingsSnap = await db.collection('settings').doc('admin').get()
+      if (!settingsSnap.exists) {
+        console.warn('Admin settings not found for daily target bonus')
+        return null
+      }
+
+      const settings = settingsSnap.data()!
+      const dailyTarget = settings.deliveryPartner?.dailyTarget || 0
+      const dailyTargetBonus = settings.deliveryPartner?.dailyTargetBonus || 0
+
+      if (dailyTarget <= 0 || dailyTargetBonus <= 0) {
+        console.log('Daily target or bonus not configured')
+        return null
+      }
+
+      // Get yesterday's date range
+      const yesterday = new Date()
+      yesterday.setDate(yesterday.getDate() - 1)
+      yesterday.setHours(0, 0, 0, 0)
+      const yesterdayEnd = new Date(yesterday)
+      yesterdayEnd.setHours(23, 59, 59, 999)
+
+      // Get all delivered orders from yesterday
+      const ordersSnap = await db
+        .collection('orders')
+        .where('status', '==', 'delivered')
+        .where('completedAt', '>=', Timestamp.fromDate(yesterday))
+        .where('completedAt', '<=', Timestamp.fromDate(yesterdayEnd))
+        .get()
+
+      // Group by partner and calculate daily earnings
+      const partnerEarnings = new Map<string, number>()
+      
+      for (const doc of ordersSnap.docs) {
+        const order = doc.data()
+        const partnerId = order.deliveryPartnerId
+        if (!partnerId) continue
+
+        // Find the transaction for this order to get the actual earning
+        const txnSnap = await db
+          .collection('transactions')
+          .where('orderId', '==', doc.id)
+          .where('type', '==', 'order_earning')
+          .limit(1)
+          .get()
+
+        if (!txnSnap.empty) {
+          const earning = txnSnap.docs[0].data().amount || 0
+          partnerEarnings.set(partnerId, (partnerEarnings.get(partnerId) || 0) + earning)
+        }
+      }
+
+      // Credit bonus to partners who met the target
+      let bonusCreditCount = 0
+      for (const [partnerId, earnings] of partnerEarnings.entries()) {
+        if (earnings >= dailyTarget) {
+          const bonusTxnId = `daily-bonus-${partnerId}-${yesterday.toISOString().split('T')[0]}`
+          const txnRef = db.collection('transactions').doc(bonusTxnId)
+
+          try {
+            await db.runTransaction(async (transaction) => {
+              const existingTxn = await transaction.get(txnRef)
+              if (existingTxn.exists) {
+                console.log(`Daily bonus already credited for ${partnerId}`)
+                return
+              }
+
+              transaction.set(txnRef, {
+                id: bonusTxnId,
+                partnerId,
+                type: 'daily_target_bonus',
+                title: `Daily Target Bonus (₹${earnings} earned)`,
+                amount: dailyTargetBonus,
+                method: 'wallet',
+                status: 'completed',
+                remarks: `Met daily target of ₹${dailyTarget}`,
+                createdAt: Timestamp.now(),
+                processedAt: Timestamp.now(),
+              })
+
+              transaction.update(db.collection('deliveryPartners').doc(partnerId), {
+                pocketBalance: admin.firestore.FieldValue.increment(dailyTargetBonus),
+              })
+            })
+
+            bonusCreditCount++
+          } catch (err) {
+            console.error(`Error crediting daily bonus to ${partnerId}:`, err)
+          }
+        }
+      }
+
+      console.log(`Daily target bonus credited to ${bonusCreditCount} partners`)
+      return null
+    } catch (error) {
+      console.error('Error crediting daily target bonus:', error)
+      throw error
+    }
+  })
+
+// ============================================================================
+// SCHEDULED FUNCTION: Weekly Incentive Credit
+// ============================================================================
+
+/**
+ * Runs every Monday at 00:05 to credit weekly trip incentives
+ * Checks previous week's completed trips against incentiveSlots
+ */
+export const creditWeeklyIncentives = functions.pubsub
+  .schedule('5 0 * * 1')
+  .timeZone('Asia/Kolkata')
+  .onRun(async () => {
+    try {
+      // Get admin settings for incentive slots
+      const settingsSnap = await db.collection('settings').doc('admin').get()
+      if (!settingsSnap.exists) {
+        console.warn('Admin settings not found for weekly incentives')
+        return null
+      }
+
+      const settings = settingsSnap.data()!
+      const incentiveSlots = settings.deliveryPartner?.incentiveSlots || []
+
+      if (incentiveSlots.length === 0) {
+        console.log('No incentive slots configured')
+        return null
+      }
+
+      // Get last week's date range (Monday to Sunday)
+      const today = new Date()
+      const lastMonday = new Date(today)
+      lastMonday.setDate(today.getDate() - 7)
+      lastMonday.setHours(0, 0, 0, 0)
+      const lastMondayOffset = lastMonday.getDay() === 0 ? 6 : lastMonday.getDay() - 1
+      lastMonday.setDate(lastMonday.getDate() - lastMondayOffset)
+
+      const lastSunday = new Date(lastMonday)
+      lastSunday.setDate(lastMonday.getDate() + 6)
+      lastSunday.setHours(23, 59, 59, 999)
+
+      // Get all delivered orders from last week
+      const ordersSnap = await db
+        .collection('orders')
+        .where('status', '==', 'delivered')
+        .where('completedAt', '>=', Timestamp.fromDate(lastMonday))
+        .where('completedAt', '<=', Timestamp.fromDate(lastSunday))
+        .get()
+
+      // Count trips per partner
+      const partnerTrips = new Map<string, number>()
+      
+      for (const doc of ordersSnap.docs) {
+        const order = doc.data()
+        const partnerId = order.deliveryPartnerId
+        if (partnerId) {
+          partnerTrips.set(partnerId, (partnerTrips.get(partnerId) || 0) + 1)
+        }
+      }
+
+      // Credit incentives to partners who qualified
+      let incentiveCreditCount = 0
+      for (const [partnerId, trips] of partnerTrips.entries()) {
+        // Find the highest incentive slot the partner qualifies for
+        const sortedSlots = [...incentiveSlots].sort((a, b) => a.trips - b.trips)
+        let incentiveAmount = 0
+        
+        for (const slot of sortedSlots) {
+          if (trips >= slot.trips) {
+            incentiveAmount = slot.amount
+          }
+        }
+
+        if (incentiveAmount > 0) {
+          const weekLabel = lastMonday.toISOString().split('T')[0]
+          const incentiveTxnId = `weekly-incentive-${partnerId}-${weekLabel}`
+          const txnRef = db.collection('transactions').doc(incentiveTxnId)
+
+          try {
+            await db.runTransaction(async (transaction) => {
+              const existingTxn = await transaction.get(txnRef)
+              if (existingTxn.exists) {
+                console.log(`Weekly incentive already credited for ${partnerId}`)
+                return
+              }
+
+              transaction.set(txnRef, {
+                id: incentiveTxnId,
+                partnerId,
+                type: 'weekly_incentive',
+                title: `Weekly Incentive (${trips} trips)`,
+                amount: incentiveAmount,
+                method: 'wallet',
+                status: 'completed',
+                remarks: `Week of ${weekLabel}: ${trips} trips completed`,
+                createdAt: Timestamp.now(),
+                processedAt: Timestamp.now(),
+              })
+
+              transaction.update(db.collection('deliveryPartners').doc(partnerId), {
+                pocketBalance: admin.firestore.FieldValue.increment(incentiveAmount),
+              })
+            })
+
+            incentiveCreditCount++
+          } catch (err) {
+            console.error(`Error crediting weekly incentive to ${partnerId}:`, err)
+          }
+        }
+      }
+
+      console.log(`Weekly incentives credited to ${incentiveCreditCount} partners`)
+      return null
+    } catch (error) {
+      console.error('Error crediting weekly incentives:', error)
+      throw error
+    }
+  })
+
+// ============================================================================
 // SCHEDULED FUNCTION: Daily Audit Cleanup
 // ============================================================================
 
@@ -622,14 +843,32 @@ function computePayablePaise(order: admin.firestore.DocumentData): number {
   const tax         = Number(order.tax         ?? 0)
   const deliveryFee = Number(order.deliveryFee ?? 0)
   const platformFee = Number(order.platformFee ?? 0)
-  const discount    = Number(order.discount    ?? 0)
   const tip         = Number(order.tip         ?? 0)
+  // walletUsed is the portion covered by the customer's wallet balance.
+  // Flutter's cart.grandTotal already subtracts this, so we must mirror it
+  // here otherwise the server-side recomputation is always higher than
+  // order.total by exactly the wallet amount, causing a false mismatch error.
+  const walletUsed  = Number(order.walletUsed  ?? 0)
 
-  const recomputed = subtotal + tax + deliveryFee + platformFee - discount + tip
+  // NOTE: discount is intentionally NOT subtracted here.
+  // Flutter writes `subtotal = itemsTotal` which is already the post-discount
+  // price (displayPrice × qty). Flutter's grandTotal formula is:
+  //   (itemsTotal + discount) + fee + tax + platform - discount + tip - wallet
+  //   = itemsTotal + fee + tax + platform + tip - wallet
+  // The discount cancels out completely, so the correct server formula is:
+  const recomputed = subtotal + tax + deliveryFee + platformFee + tip - walletUsed
+
+  // Log every field so mismatches are easy to diagnose.
+  logger.info('[computePayablePaise] breakdown', {
+    orderId: order.id ?? '?',
+    subtotal, tax, deliveryFee, platformFee, tip, walletUsed,
+    recomputed, total,
+    diff: recomputed - total,
+  })
 
   // Allow ±2 rupee rounding tolerance.
   if (Math.abs(recomputed - total) > 2) {
-    logger.warn('Order amount mismatch', { orderId: order.id, total, recomputed })
+    logger.warn('Order amount mismatch', { orderId: order.id, total, recomputed, walletUsed })
     throw new HttpsError('failed-precondition', 'Order amount failed server validation.')
   }
   return toPaise(total)
@@ -825,12 +1064,12 @@ function cashLimitRupees(partner: admin.firestore.DocumentData, settings: admin.
   return configured > 0 ? Math.round(configured) : 0
 }
 
-/** Once cash in hand reaches the limit, the partner must pay all of it. */
+/** COD held above the cash limit — partner pays only the excess, not full cash in hand. */
 function cashDueRupees(partner: admin.firestore.DocumentData, settings: admin.firestore.DocumentData | undefined): number {
   const held = Math.round(Number(partner.cashInHand ?? 0))
   const limit = cashLimitRupees(partner, settings)
-  if (limit <= 0 || held <= 0) return 0
-  return held >= limit ? held : 0
+  if (limit <= 0 || held <= limit) return 0
+  return held - limit
 }
 
 async function applyCashDeposit(params: {
@@ -889,9 +1128,8 @@ async function applyCashDeposit(params: {
 }
 
 /**
- * createCashDepositOrder — once cash in hand reaches the admin cash limit, the
- * partner pays all of it into the same production Razorpay account used for
- * customer orders.
+ * createCashDepositOrder — when cash in hand exceeds the admin cash limit, the
+ * partner pays only the excess (held − limit) via the production Razorpay account.
  */
 export const createCashDepositOrder = onCallV2(
   { region: 'asia-south1', secrets: [RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET] },
@@ -906,7 +1144,7 @@ export const createCashDepositOrder = onCallV2(
       throw new HttpsError('permission-denied', 'You can only settle your own cash.')
     const settingsSnap = await db.collection('settings').doc('admin').get()
     const due = cashDueRupees(partner, settingsSnap.data())
-    if (due <= 0) throw new HttpsError('failed-precondition', 'Cash in hand has not reached the limit.')
+    if (due <= 0) throw new HttpsError('failed-precondition', 'No excess cash above your limit to pay.')
 
     const amountPaise = due * 100
     const keyId = RAZORPAY_KEY_ID.value()
@@ -1185,17 +1423,31 @@ export const sendPushNotification = functions.https.onCall(
           fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalidTokens),
         })
       )
-      // Clean from deliveryPartners
+      // Clean from deliveryPartners — also mark them offline if all tokens are invalid
       const partnerSnap = await db
         .collection('deliveryPartners')
         .where('fcmTokens', 'array-contains-any', invalidTokens.slice(0, 10))
         .limit(50)
         .get()
-      partnerSnap.docs.forEach(d =>
-        batch.update(d.ref, {
+      partnerSnap.docs.forEach(d => {
+        const partnerData = d.data()
+        const currentTokens: string[] = Array.isArray(partnerData.fcmTokens) ? partnerData.fcmTokens : []
+        const remainingTokens = currentTokens.filter((t: string) => !invalidTokens.includes(t))
+
+        const update: Record<string, any> = {
           fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalidTokens),
-        })
-      )
+        }
+        // If no valid tokens remain AND partner is currently online, mark offline.
+        // This handles the uninstall case — invalid token = app no longer installed.
+        if (remainingTokens.length === 0 && partnerData.status === 'online') {
+          update.status       = 'offline'
+          update.updatedAt    = admin.firestore.FieldValue.serverTimestamp()
+          update.lastSeen     = admin.firestore.FieldValue.serverTimestamp()
+          update.offlineReason = 'app_uninstalled'
+          logger.info(`[TokenCleanup] Marking partner ${d.id} offline — all FCM tokens invalid (app likely uninstalled)`)
+        }
+        batch.update(d.ref, update)
+      })
       try { await batch.commit() } catch (e) {
         logger.warn('Failed to remove stale tokens', e)
       }
@@ -1261,28 +1513,48 @@ export const onOrderNeedsReassignment = functions.firestore
     ].filter(Boolean)
 
     // ── 2. Fetch online, approved partners ──────────────────────────────────
+    // Flutter delivery app writes `status: 'online'` while active and may
+    // write `status: 'available'` after rejecting an order (via setAvailable).
+    // We accept both values so partners in either state are eligible.
     const partnersSnap = await db
       .collection('deliveryPartners')
       .where('approved', '==', true)
-      .where('blocked',  '==', false)
-      .where('available', '==', true)
+      .where('status',   'in', ['online', 'available'])
       .get()
 
     if (partnersSnap.empty) {
-      logger.warn(`[Reassign] No available partners for order ${orderId}`)
-      // Clear the flag so admin can retry manually.
-      await change.after.ref.update({ needsReassignment: false, updatedAt: Timestamp.now() })
+      logger.warn(`[Reassign] No online/available approved partners for order ${orderId}`)
+      // Leave needsReassignment: true so the trigger fires again when a
+      // partner comes online instead of permanently silencing the flag.
+      await change.after.ref.update({
+        needsReassignment: false,
+        reassignPending:   true,
+        updatedAt:         Timestamp.now(),
+      })
       return null
     }
 
-    // ── 3. Filter out excluded partners ─────────────────────────────────────
+    // ── 3. Filter out excluded partners and blocked/busy ones ────────────────
     const candidates = partnersSnap.docs
       .map(d => ({ id: d.id, ...d.data() }))
-      .filter((p: any) => !excluded.includes(p.id))
+      .filter((p: any) => {
+        if (excluded.includes(p.id)) return false
+        // Skip partners that are blocked or already busy with another order
+        if (p.status === 'blocked' || p.status === 'busy') return false
+        // Skip if blockedAt is set (legacy block that wasn't cleared properly)
+        if (p.blockedAt) return false
+        return true
+      })
 
     if (candidates.length === 0) {
       logger.warn(`[Reassign] All available partners excluded for order ${orderId}`)
-      await change.after.ref.update({ needsReassignment: false, updatedAt: Timestamp.now() })
+      // Reset the trigger flag and mark as pending so the partner-online
+      // trigger can restart the flow when someone becomes available.
+      await change.after.ref.update({
+        needsReassignment: false,
+        reassignPending:   true,
+        updatedAt:         Timestamp.now(),
+      })
       return null
     }
 
@@ -1335,6 +1607,7 @@ export const onOrderNeedsReassignment = functions.firestore
       partnerAccepted:     false,
       deliveryStage:       'to_restaurant',
       needsReassignment:   false,
+      reassignPending:     false,
       reassignedAt:        Timestamp.now(),
       updatedAt:           Timestamp.now(),
       timeline: admin.firestore.FieldValue.arrayUnion({
@@ -1409,6 +1682,59 @@ export const onOrderNeedsReassignment = functions.firestore
       }
     }
 
+    return null
+  })
+
+
+// ============================================================================
+// FIRESTORE TRIGGER: Partner comes online → wake up pending reassignments
+// ============================================================================
+
+/**
+ * When a delivery partner's status changes to 'online' or 'available',
+ * check for orders that were waiting for a partner (reassignPending: true)
+ * and restart the reassignment flow for each one by setting
+ * needsReassignment: true, which re-fires onOrderNeedsReassignment.
+ *
+ * This handles the case where a rejection happens when NO other partner
+ * is online — the order is parked with reassignPending:true and picked up
+ * the moment the next partner comes online.
+ */
+export const onPartnerCameOnline = functions.firestore
+  .document('deliveryPartners/{partnerId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data()
+    const after  = change.after.data()
+
+    const wasOnline = before.status === 'online' || before.status === 'available'
+    const isOnline  = after.status  === 'online' || after.status  === 'available'
+
+    // Only act when the partner just transitioned to an online state.
+    if (wasOnline || !isOnline) return null
+
+    const partnerId: string = context.params.partnerId
+    logger.info(`[ReassignRetry] Partner ${partnerId} came online — checking pending reassignments`)
+
+    // Find active orders waiting for a partner.
+    const pendingSnap = await db
+      .collection('orders')
+      .where('reassignPending', '==', true)
+      .where('status', 'in', ['pending', 'accepted'])
+      .get()
+
+    if (pendingSnap.empty) return null
+
+    logger.info(`[ReassignRetry] Found ${pendingSnap.size} pending reassignment(s)`)
+
+    const batchOps = db.batch()
+    for (const orderDoc of pendingSnap.docs) {
+      batchOps.update(orderDoc.ref, {
+        needsReassignment: true,
+        reassignPending:   false,
+        updatedAt:         Timestamp.now(),
+      })
+    }
+    await batchOps.commit()
     return null
   })
 
@@ -1590,3 +1916,294 @@ export const onSupportTicketReply = functions.firestore
     }
     return null
   })
+
+
+// ============================================================================
+// SCHEDULED FUNCTION: Auto-offline stale delivery partners (every 5 minutes)
+// ============================================================================
+
+/**
+ * Marks delivery partners offline when their `lastSeen` heartbeat is older
+ * than STALE_THRESHOLD_MINUTES. This handles:
+ *
+ *   - App uninstalled without going offline (no FCM push possible)
+ *   - Device force-killed / battery died
+ *   - App frozen / backgrounded too long with battery optimisation
+ *   - Network loss with no graceful disconnect
+ *
+ * The delivery app writes `lastSeen: serverTimestamp()` with every GPS update
+ * (every 30 s while online). If we don't see a heartbeat for 10 minutes the
+ * partner is considered unreachable and we switch them offline so the admin
+ * auto-assigner skips them.
+ *
+ * If the partner has an active order in progress we leave them as-is — the
+ * order was already assigned and the restaurant/customer are waiting. The
+ * admin reconciler handles stuck orders separately.
+ */
+const STALE_THRESHOLD_MINUTES = 10
+
+export const autoOfflineStalePartners = functions.pubsub
+  .schedule('every 5 minutes')
+  .onRun(async () => {
+    const cutoff = new Date(Date.now() - STALE_THRESHOLD_MINUTES * 60 * 1000)
+    const cutoffTs = admin.firestore.Timestamp.fromDate(cutoff)
+
+    logger.info(`[AutoOffline] Checking for partners with lastSeen < ${cutoff.toISOString()}`)
+
+    // Fetch all partners currently marked online
+    const onlineSnap = await db
+      .collection('deliveryPartners')
+      .where('status', '==', 'online')
+      .get()
+
+    if (onlineSnap.empty) {
+      logger.info('[AutoOffline] No online partners found — nothing to do')
+      return null
+    }
+
+    const batch = db.batch()
+    let staleCount = 0
+
+    for (const doc of onlineSnap.docs) {
+      const partner = doc.data()
+
+      // Skip partners with an active order — don't disrupt a live delivery
+      if (partner.currentOrder) {
+        logger.info(`[AutoOffline] Skipping partner ${doc.id} — has active order ${partner.currentOrder}`)
+        continue
+      }
+
+      const lastSeen: admin.firestore.Timestamp | null = partner.lastSeen ?? null
+
+      // If lastSeen is missing entirely, use a very old date so they are caught
+      const lastSeenTs = lastSeen ?? admin.firestore.Timestamp.fromMillis(0)
+
+      if (lastSeenTs.toMillis() < cutoffTs.toMillis()) {
+        logger.info(
+          `[AutoOffline] Marking partner ${doc.id} (${partner.name ?? ''}) offline. ` +
+          `lastSeen: ${lastSeen ? lastSeen.toDate().toISOString() : 'never'}`
+        )
+        batch.update(doc.ref, {
+          status:       'offline',
+          updatedAt:    admin.firestore.FieldValue.serverTimestamp(),
+          offlineReason: 'heartbeat_timeout',
+          // Clear currentOrder so it is not stuck
+          currentOrder: null,
+        })
+        staleCount++
+      }
+    }
+
+    if (staleCount > 0) {
+      await batch.commit()
+      logger.info(`[AutoOffline] Marked ${staleCount} stale partner(s) offline`)
+    } else {
+      logger.info('[AutoOffline] All online partners have fresh heartbeats')
+    }
+
+    return null
+  })
+
+
+// ============================================================================
+// FIRESTORE TRIGGER: Order chat message sent → push to the other party
+// ============================================================================
+
+/**
+ * Fires whenever a message is added to `orders/{orderId}/chat/{messageId}`.
+ *
+ * Routing logic:
+ *   - senderType === 'customer'  → push to the delivery partner
+ *   - senderType === 'partner'   → push to the customer
+ *
+ * Tokens are stored as arrays on the respective Firestore docs:
+ *   deliveryPartners/{partnerId}.fcmTokens
+ *   customers/{customerId}.fcmTokens
+ *
+ * The FCM data payload carries `action: 'open_order_chat'` and `orderId`
+ * so both Flutter apps can navigate directly to the chat screen.
+ */
+export const onOrderChatMessage = functions.firestore
+  .document('orders/{orderId}/chat/{messageId}')
+  .onCreate(async (snap, context) => {
+    const msg = snap.data() ?? {}
+    const orderId: string = context.params.orderId
+    const senderType: string = String(msg.senderType ?? '')
+    const senderName: string = String(msg.senderName ?? 'Someone')
+    const text: string = String(msg.message ?? '').trim()
+
+    if (!senderType || !text) return null
+
+    // Fetch the parent order to get recipient IDs
+    const orderSnap = await db.collection('orders').doc(orderId).get()
+    if (!orderSnap.exists) return null
+    const order = orderSnap.data() ?? {}
+
+    const body = text.length > 140 ? `${text.slice(0, 137)}...` : text
+    let tokens: string[] = []
+    let title = ''
+
+    if (senderType === 'customer') {
+      // Push to the delivery partner
+      const partnerId: string = String(order.deliveryPartnerId ?? order.riderId ?? '')
+      if (!partnerId) return null
+
+      const partnerSnap = await db.collection('deliveryPartners').doc(partnerId).get()
+      if (!partnerSnap.exists) return null
+      const partner = partnerSnap.data() ?? {}
+
+      // Respect the partner's notification preference
+      if (partner.notificationsEnabled === false) return null
+
+      tokens = Array.isArray(partner.fcmTokens)
+        ? partner.fcmTokens.filter((t: unknown) => typeof t === 'string' && (t as string).length > 0)
+        : []
+
+      const displayOrderNumber: string = String(order.displayOrderNumber ?? order.orderNumber ?? orderId)
+      title = `${senderName} · Order ${displayOrderNumber}`
+
+    } else if (senderType === 'partner') {
+      // Push to the customer
+      const customerId: string = String(order.customerId ?? order.userId ?? '')
+      if (!customerId) return null
+
+      const customerSnap = await db.collection('customers').doc(customerId).get()
+      if (!customerSnap.exists) return null
+      const customer = customerSnap.data() ?? {}
+
+      tokens = Array.isArray(customer.fcmTokens)
+        ? customer.fcmTokens.filter((t: unknown) => typeof t === 'string' && (t as string).length > 0)
+        : []
+
+      title = `${senderName} (Delivery Partner)`
+
+    } else {
+      return null
+    }
+
+    if (tokens.length === 0) {
+      logger.info(`[OrderChat] No FCM tokens for recipient; orderId=${orderId}`)
+      return null
+    }
+
+    try {
+      const response = await admin.messaging().sendEachForMulticast({
+        tokens,
+        notification: { title, body },
+        data: {
+          type: 'order_chat',
+          action: 'open_order_chat',
+          orderId,
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'general',
+            sound: 'default',
+            tag: `order_chat_${orderId}`,
+          },
+        },
+        apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+      })
+      logger.info(`[OrderChat] Push sent for orderId=${orderId}`, {
+        senderType,
+        successCount: response.successCount,
+        failureCount: response.failureCount,
+      })
+    } catch (e) {
+      logger.error(`[OrderChat] Failed to push for orderId=${orderId}`, e)
+    }
+
+    return null
+  })
+
+
+// ============================================================================
+// CALLABLE: Backfill a delivery partner's tipBalance from historical orders
+// ============================================================================
+
+/**
+ * Scans all delivered orders for a given partner, sums the `tip` field,
+ * and writes the correct split onto the partner document:
+ *
+ *   tipBalance  = total tips from all delivered orders
+ *   pocketBalance adjusted so that (pocketBalance + tipBalance) stays the
+ *                 same — tips that were previously absorbed into pocketBalance
+ *                 are moved out into tipBalance without changing the partner's
+ *                 total spendable money.
+ *
+ * Called by the admin panel from the partner detail drawer.
+ * Requires admin auth.
+ */
+export const backfillPartnerTipBalance = functions.https.onCall(
+  async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be signed in as admin.'
+      )
+    }
+
+    const partnerId: string = String(data.partnerId ?? '').trim()
+    if (!partnerId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'partnerId is required.'
+      )
+    }
+
+    // 1. Sum all tip values from delivered orders assigned to this partner.
+    const ordersSnap = await db
+      .collection('orders')
+      .where('deliveryPartnerId', '==', partnerId)
+      .where('status', '==', 'delivered')
+      .get()
+
+    let totalTips = 0
+    for (const doc of ordersSnap.docs) {
+      totalTips += Number(doc.data().tip ?? 0)
+    }
+
+    logger.info(
+      `[TipBackfill] Partner ${partnerId}: ${ordersSnap.size} delivered orders, totalTips=₹${totalTips}`
+    )
+
+    // 2. Read the partner doc inside a transaction so the adjustment is atomic.
+    const partnerRef = db.collection('deliveryPartners').doc(partnerId)
+
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(partnerRef)
+      if (!snap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Partner not found.')
+      }
+      const partner = snap.data()!
+      const currentTipBalance   = Number(partner.tipBalance   ?? 0)
+      const currentPocketBalance = Number(partner.pocketBalance ?? 0)
+
+      // Tips that were credited to pocketBalance but should be tipBalance.
+      const tipsToMove = totalTips - currentTipBalance
+
+      // Don't let pocketBalance go below zero from the adjustment.
+      const actualMove = Math.min(tipsToMove, currentPocketBalance)
+
+      if (actualMove <= 0 && tipsToMove <= 0) {
+        logger.info(`[TipBackfill] Partner ${partnerId}: already correct, nothing to do`)
+        return
+      }
+
+      tx.update(partnerRef, {
+        tipBalance:    totalTips,
+        // Subtract from pocket only the amount we're moving (avoid double-counting).
+        pocketBalance: Math.max(0, currentPocketBalance - actualMove),
+        updatedAt:     Timestamp.now(),
+      })
+
+      logger.info(
+        `[TipBackfill] Partner ${partnerId}: tipBalance ${currentTipBalance}→${totalTips}, ` +
+        `pocketBalance ${currentPocketBalance}→${Math.max(0, currentPocketBalance - actualMove)}`
+      )
+    })
+
+    return { success: true, totalTips, orderCount: ordersSnap.size }
+  }
+)

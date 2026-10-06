@@ -1,8 +1,6 @@
 import 'dart:async';
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-
 import '../constants/color_constants.dart';
 import '../constants/legal_content.dart';
 import '../models/delivery_partner.dart';
@@ -247,18 +245,39 @@ class _SignedInShellState extends State<_SignedInShell>
     }
 
     final partner = _partner;
+    final onboarding = OnboardingScope.maybeOf(context);
+
     if (partner == null || !partner.hasCity) {
-      return SelectCityScreen(initialCity: partner?.city);
+      return SelectCityScreen(
+        initialCity: OnboardingController.pickDraft(
+          onboarding?.city ?? '',
+          partner?.city ?? '',
+        ),
+      );
     }
     if (!partner.hasPersonalDetails) {
       return PersonalDetailsScreen(
-        initialName: partner.name,
-        initialDob: partner.dateOfBirth,
-        initialGender: partner.gender,
+        initialName: OnboardingController.pickDraft(
+          onboarding?.fullName ?? '',
+          partner.name,
+        ),
+        initialDob: OnboardingController.pickDraft(
+          onboarding?.dateOfBirth ?? '',
+          partner.dateOfBirth,
+        ),
+        initialGender: OnboardingController.pickDraft(
+          onboarding?.gender ?? '',
+          partner.gender,
+        ),
       );
     }
     if (!partner.hasVehicle) {
-      return SelectVehicleScreen(initialVehicle: partner.vehicle);
+      return SelectVehicleScreen(
+        initialVehicle: OnboardingController.pickDraft(
+          onboarding?.vehicle ?? '',
+          partner.vehicle,
+        ),
+      );
     }
     if (!partner.documentsComplete) {
       return UploadDocumentsScreen(partner: partner);

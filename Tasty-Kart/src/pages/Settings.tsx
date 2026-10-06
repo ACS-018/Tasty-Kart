@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Save, Globe, DollarSign, Truck, Percent, FileText, Shield, Info, Settings as SettingsIcon, Loader2, Plus, Trash2, Video } from 'lucide-react'
+import { Save, Globe, DollarSign, Truck, Percent, FileText, Shield, Info, Settings as SettingsIcon, Loader2, Plus, Trash2, Video, Smartphone } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Input, Select, Textarea } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
@@ -23,6 +23,7 @@ const tabs = [
   { id: 'legal', label: 'Legal', icon: FileText },
   { id: 'security', label: 'Security', icon: Shield },
   { id: 'about', label: 'About', icon: Info },
+  { id: 'appVersions', label: 'App Versions', icon: Smartphone },
 ]
 
 const colorMap = {
@@ -671,6 +672,137 @@ export function Settings() {
                 <Input label="Contact Email" type="email" value={settings.about.contactEmail}
                   onChange={e => setSettings(s => ({ ...s, about: { ...s.about, contactEmail: e.target.value } }))} />
               </div>
+              <div className="flex justify-end mt-5">
+                <Button icon={saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} disabled={saving} onClick={handleSave}>
+                  {saving ? 'Saving...' : 'Save'}
+                </Button>
+              </div>
+            </Card>
+          )}
+
+          {activeTab === 'appVersions' && (
+            <Card className="rounded-2xl border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-2 mb-1">
+                <Smartphone size={18} className="text-[#B32B2C]" />
+                <h3 className="text-base font-semibold text-gray-900">App Version Control</h3>
+              </div>
+              <p className="text-xs text-gray-500 mb-6">
+                Set the minimum required build number for each app. Users on older builds will see a
+                non-dismissible "Update Required" dialog and be redirected to the Play Store.
+                Set <strong>Min Build</strong> to <strong>0</strong> to disable force-update for that app.
+              </p>
+
+              <div className="space-y-8">
+                {/* ── Customer App ── */}
+                <div className="border border-gray-100 rounded-xl p-5 space-y-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">👤</span>
+                    <h4 className="font-semibold text-gray-800">Customer App</h4>
+                    <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-medium">
+                      Current min build: {settings.appVersions?.userApp?.minBuild ?? 0}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <Input
+                      label="Min Build Number"
+                      type="number"
+                      placeholder="e.g. 5"
+                      value={String(settings.appVersions?.userApp?.minBuild ?? 0)}
+                      onChange={e => setSettings(s => ({
+                        ...s,
+                        appVersions: {
+                          ...s.appVersions,
+                          userApp: { ...s.appVersions.userApp, minBuild: Number(e.target.value) || 0 },
+                        },
+                      }))}
+                    />
+                    <Input
+                      label="Min Version Name (display)"
+                      placeholder="e.g. 2.1.0"
+                      value={settings.appVersions?.userApp?.minVersionName ?? ''}
+                      onChange={e => setSettings(s => ({
+                        ...s,
+                        appVersions: {
+                          ...s.appVersions,
+                          userApp: { ...s.appVersions.userApp, minVersionName: e.target.value },
+                        },
+                      }))}
+                    />
+                    <Input
+                      label="Play Store URL"
+                      placeholder="https://play.google.com/…"
+                      value={settings.appVersions?.userApp?.playStoreUrl ?? ''}
+                      onChange={e => setSettings(s => ({
+                        ...s,
+                        appVersions: {
+                          ...s.appVersions,
+                          userApp: { ...s.appVersions.userApp, playStoreUrl: e.target.value },
+                        },
+                      }))}
+                    />
+                  </div>
+                </div>
+
+                {/* ── Delivery Boy App ── */}
+                <div className="border border-gray-100 rounded-xl p-5 space-y-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🛵</span>
+                    <h4 className="font-semibold text-gray-800">Delivery Partner App</h4>
+                    <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">
+                      Current min build: {settings.appVersions?.deliveryApp?.minBuild ?? 0}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <Input
+                      label="Min Build Number"
+                      type="number"
+                      placeholder="e.g. 5"
+                      value={String(settings.appVersions?.deliveryApp?.minBuild ?? 0)}
+                      onChange={e => setSettings(s => ({
+                        ...s,
+                        appVersions: {
+                          ...s.appVersions,
+                          deliveryApp: { ...s.appVersions.deliveryApp, minBuild: Number(e.target.value) || 0 },
+                        },
+                      }))}
+                    />
+                    <Input
+                      label="Min Version Name (display)"
+                      placeholder="e.g. 2.1.0"
+                      value={settings.appVersions?.deliveryApp?.minVersionName ?? ''}
+                      onChange={e => setSettings(s => ({
+                        ...s,
+                        appVersions: {
+                          ...s.appVersions,
+                          deliveryApp: { ...s.appVersions.deliveryApp, minVersionName: e.target.value },
+                        },
+                      }))}
+                    />
+                    <Input
+                      label="Play Store URL"
+                      placeholder="https://play.google.com/…"
+                      value={settings.appVersions?.deliveryApp?.playStoreUrl ?? ''}
+                      onChange={e => setSettings(s => ({
+                        ...s,
+                        appVersions: {
+                          ...s.appVersions,
+                          deliveryApp: { ...s.appVersions.deliveryApp, playStoreUrl: e.target.value },
+                        },
+                      }))}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-100 rounded-xl mt-6">
+                <span className="text-amber-500 mt-0.5">⚠️</span>
+                <p className="text-xs text-amber-700">
+                  <strong>How it works:</strong> The build number in each Flutter app's <code>pubspec.yaml</code> is
+                  the number after the <code>+</code> in <code>version: 1.0.0+5</code> (here it's <strong>5</strong>).
+                  Set <em>Min Build</em> to that number or higher to force all users on older builds to update.
+                </p>
+              </div>
+
               <div className="flex justify-end mt-5">
                 <Button icon={saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} disabled={saving} onClick={handleSave}>
                   {saving ? 'Saving...' : 'Save'}

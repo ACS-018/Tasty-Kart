@@ -354,7 +354,15 @@ export interface Order {
   // Cancellation
   cancelReason?: string
   cancelPhase?: string
-  cancelledBy?: string
+  cancelledBy?: string          // 'user' | 'admin' | partnerId
+  cancellationSource?: 'user' | 'admin' | 'partner' // who initiated the cancel
+  userCancelledAt?: string      // ISO timestamp when user cancelled
+
+  // Refund eligibility (set by cancelOrderByUser)
+  refundEligible?: boolean      // true when paymentMethod is NOT Cash/COD
+  refundStatus?: 'pending' | 'processed' | 'not_applicable'
+  refundAmount?: number         // set when admin processes the refund
+  refundedAt?: any              // server timestamp
   
   // Timestamps
   createdAt: string

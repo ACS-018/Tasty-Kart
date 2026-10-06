@@ -534,6 +534,7 @@ export interface AdminSettings {
     acceptanceTimeout: number
     lateDeliveryThreshold: number
     lateDeliveryPenalty: number
+    orderCancellationPenalty: number
     cashLimitDefault: number
     withdrawalMinAmount: number
     withdrawalMaxAmount: number
@@ -565,6 +566,18 @@ export interface AdminSettings {
     website: string
     contactEmail: string
     version: string
+  }
+  appVersions: {
+    userApp: {
+      minBuild: number
+      minVersionName: string
+      playStoreUrl: string
+    }
+    deliveryApp: {
+      minBuild: number
+      minVersionName: string
+      playStoreUrl: string
+    }
   }
 }
 
@@ -602,6 +615,7 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
     acceptanceTimeout: 120,
     lateDeliveryThreshold: 45,
     lateDeliveryPenalty: 20,
+    orderCancellationPenalty: 50,
     cashLimitDefault: 10000,
     withdrawalMinAmount: 500,
     withdrawalMaxAmount: 50000,
@@ -645,6 +659,18 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
     contactEmail: 'hello@tastykart.com',
     version: '1.0.0',
   },
+  appVersions: {
+    userApp: {
+      minBuild: 0,
+      minVersionName: '',
+      playStoreUrl: '',
+    },
+    deliveryApp: {
+      minBuild: 0,
+      minVersionName: '',
+      playStoreUrl: '',
+    },
+  },
 }
 
 const SETTINGS_DOC = doc(db, 'settings', 'admin')
@@ -669,6 +695,10 @@ export async function getAdminSettings(): Promise<AdminSettings> {
       legal: { ...DEFAULT_ADMIN_SETTINGS.legal, ...data.legal },
       security: { ...DEFAULT_ADMIN_SETTINGS.security, ...data.security },
       about: { ...DEFAULT_ADMIN_SETTINGS.about, ...data.about },
+      appVersions: {
+        userApp: { ...DEFAULT_ADMIN_SETTINGS.appVersions.userApp, ...(data as any).appVersions?.userApp },
+        deliveryApp: { ...DEFAULT_ADMIN_SETTINGS.appVersions.deliveryApp, ...(data as any).appVersions?.deliveryApp },
+      },
     }
   } catch (err) {
     console.warn('getAdminSettings:', err)
@@ -710,6 +740,10 @@ export function subscribeToAdminSettings(onData: (settings: AdminSettings) => vo
       legal: { ...DEFAULT_ADMIN_SETTINGS.legal, ...data.legal },
       security: { ...DEFAULT_ADMIN_SETTINGS.security, ...data.security },
       about: { ...DEFAULT_ADMIN_SETTINGS.about, ...data.about },
+      appVersions: {
+        userApp: { ...DEFAULT_ADMIN_SETTINGS.appVersions.userApp, ...(data as any).appVersions?.userApp },
+        deliveryApp: { ...DEFAULT_ADMIN_SETTINGS.appVersions.deliveryApp, ...(data as any).appVersions?.deliveryApp },
+      },
     })
   }, (err) => {
     console.warn('settings snap:', err)
@@ -809,6 +843,19 @@ export function subscribeToTransactions(
     onData(filtered)
   }, (err) => {
     console.warn('transactions snap:', err)
+    onData([])
+  })
+}
+
+export function subscribeToWalletTransactions(
+  onData: (transactions: any[]) => void
+) {
+  const walletCol = collection(db, 'walletTransactions')
+  const q = query(walletCol, orderBy('createdAt', 'desc'))
+  return onSnapshot(q, (snap) => {
+    onData(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+  }, (err) => {
+    console.warn('walletTransactions snap:', err)
     onData([])
   })
 }

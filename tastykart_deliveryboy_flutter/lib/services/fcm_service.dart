@@ -8,9 +8,12 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../main.dart';
+import '../models/delivery_partner.dart';
+import '../screens/order/order_chat_screen.dart';
 import '../screens/profile/support_ticket_chat_screen.dart';
 import '../utils/app_navigation.dart';
 import 'firestore_paths.dart';
+import 'order_service.dart';
 import 'support_ticket_service.dart';
 
 /// FCM service for handling push notifications
@@ -299,6 +302,47 @@ class FCMService {
     }
   }
 
+  /// Opens the order chat screen when the partner taps a 'open_order_chat'
+  /// push notification. Fetches the order (and the stored partner) by orderId
+  /// then pushes [DeliveryOrderChatScreen].
+  static Future<void> _openOrderChat(String orderId) async {
+    if (orderId.isEmpty) return;
+    try {
+      // Wait for the navigator to be ready (app may still be mounting).
+      var navigator = AppNavigation.rootNavigatorKey.currentState;
+      for (var i = 0; navigator == null && i < 10; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        navigator = AppNavigation.rootNavigatorKey.currentState;
+      }
+      if (navigator == null) return;
+
+      // Stream one value from the order doc.
+      final order = await OrderService.watchById(orderId).first;
+      if (order == null) return;
+
+      // Build a minimal partner stub — the chat screen uses the partner's id
+      // for the senderType check and name for the header. We fall back to the
+      // values already recorded on the order document so no extra Firestore
+      // read is needed.
+      final prefs = await SharedPreferences.getInstance();
+      final partnerId =
+          prefs.getString('partner_id') ?? order.deliveryPartnerId;
+      final partner = DeliveryPartner(
+        id: partnerId,
+        name: order.deliveryPartnerName,
+      );
+
+      navigator.push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              DeliveryOrderChatScreen(order: order, partner: partner),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[FCM] open order chat error: $e');
+    }
+  }
+
   static Future<void> _openSupportTicket(String ticketId) async {
     if (ticketId.isEmpty) return;
     try {
@@ -331,6 +375,11 @@ class FCMService {
   }) {
     if (action == 'open_support_ticket') {
       _openSupportTicket(ticketId);
+      return;
+    }
+
+    if (action == 'open_order_chat') {
+      _openOrderChat(orderId);
       return;
     }
 

@@ -33,6 +33,7 @@ class _CashDepositScreenState extends State<CashDepositScreen> {
   Future<void> _pay() async {
     if (_busy) return;
     final due = widget.partner.cashDue(widget.cashLimit);
+    final held = widget.partner.cashInHandRupees;
     if (due <= 0) {
       Navigator.pop(context, true);
       return;
@@ -47,9 +48,12 @@ class _CashDepositScreenState extends State<CashDepositScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (result.isFullyVerified) {
+      final remaining = (held - due).clamp(0, held);
       AppFeedback.showSuccess(
         context,
-        'Payment verified. Cash in hand is now ₹0. You can go online.',
+        remaining > 0
+            ? 'Payment verified. Excess cleared — ${rupee(remaining)} cash in hand remains (within your limit). You can go online.'
+            : 'Payment verified. You can go online again.',
       );
       Navigator.pop(context, true);
       return;
@@ -91,13 +95,13 @@ class _CashDepositScreenState extends State<CashDepositScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Cash in hand ${rupee(held)}',
+                  'Cash in hand ${rupee(held)} (not your earnings)',
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'This is cash you collected from customers. It belongs to TastyKart, not your earnings. '
-                  'You reached the ${rupee(widget.cashLimit)} limit, so pay it all to go online again.',
+                  'This is COD you collected for TastyKart — separate from Pocket Balance and tips. '
+                  'Your limit is ${rupee(widget.cashLimit)}. Pay only the excess ${rupee(due)} above that limit to go online again.',
                   style: const TextStyle(
                     color: AppColors.textMedium,
                     height: 1.4,
@@ -113,7 +117,7 @@ class _CashDepositScreenState extends State<CashDepositScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Pay securely with Razorpay (UPI, card or net banking) to TastyKart. Once it is verified, your cash in hand goes back to ₹0 and you can go online. Your Pocket Balance is not touched.',
+            'Pay securely with Razorpay (UPI, card or net banking). Only the excess above your cash limit is collected — the rest stays as cash in hand. Pocket Balance and tips are not touched.',
             style: TextStyle(color: AppColors.textMedium, height: 1.4),
           ),
           const SizedBox(height: 24),

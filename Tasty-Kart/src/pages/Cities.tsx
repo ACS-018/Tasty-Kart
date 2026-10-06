@@ -9,7 +9,7 @@ import { useAuth } from '@/context/AuthContext'
 import { type City } from '@/data/dummy'
 import { addDocumentToFirestore, updateDocumentInFirestore, deleteDocumentFromFirestore, subscribeToCollection } from '@/lib/firebaseService'
 
-const emptyForm = { name: '', state: '', radius: 20, hours: { open: '06:00', close: '23:00' } }
+const emptyForm = { name: '', state: '' }
 
 const INDIAN_STATES = [
   'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat',
@@ -31,14 +31,6 @@ function canonicalState(value: string) {
   const key = value.replace(/\s+/g, '').toLowerCase()
   if (!key) return ''
   return ALL_STATES.find(state => state.replace(/\s+/g, '').toLowerCase() === key) || value.trim()
-}
-
-function formatTime12h(value: string) {
-  const [h, m] = value.split(':').map(Number)
-  if (Number.isNaN(h) || Number.isNaN(m)) return value
-  const period = h >= 12 ? 'PM' : 'AM'
-  const hour = h % 12 || 12
-  return `${hour}:${String(m).padStart(2, '0')} ${period}`
 }
 
 function firestoreMessage(err: unknown) {
@@ -89,14 +81,12 @@ export function Cities() {
         country: 'India',
         latitude: edit?.latitude ?? 0,
         longitude: edit?.longitude ?? 0,
-        deliveryRadiusKm: formData.radius,
         timezone: 'Asia/Kolkata',
         currency: 'INR',
         currencySymbol: '₹',
         language: 'en',
         isActive: true,
         status: 'ACTIVE',
-        operatingHours: { startTime: formData.hours.open, endTime: formData.hours.close },
         restaurantCount: edit?.restaurantCount ?? 0,
         activePartnerCount: edit?.activePartnerCount ?? 0,
         totalOrders: edit?.totalOrders ?? 0,
@@ -186,16 +176,11 @@ export function Cities() {
                 <MapPin size={20} className="text-[#B32B2C]" />
                 <div>
                   <p className="font-semibold text-gray-900">{city.name}</p>
-                  <p className="text-xs text-gray-500">
-                    {city.state ? `${city.state} • ` : ''}{city.deliveryRadiusKm || 0} km delivery radius
-                    {city.operatingHours?.startTime && city.operatingHours?.endTime
-                      ? ` • Open ${formatTime12h(city.operatingHours.startTime)} – ${formatTime12h(city.operatingHours.endTime)}`
-                      : ''}
-                  </p>
+                  <p className="text-xs text-gray-500">{city.state || ''}</p>
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" variant="secondary" onClick={() => {setEdit(city); setFormData({name: city.name, state: canonicalState(city.state || ''), radius: city.deliveryRadiusKm || 20, hours: {open: city.operatingHours?.startTime || '06:00', close: city.operatingHours?.endTime || '23:00'}}); setShow(true)}}>Edit</Button>
+                <Button size="sm" variant="secondary" onClick={() => {setEdit(city); setFormData({name: city.name, state: canonicalState(city.state || '')}); setShow(true)}}>Edit</Button>
                 <Button size="sm" variant="danger" icon={<Trash2 size={14} />} onClick={() => setDeleteTarget(city)}>Delete</Button>
               </div>
             </div>
@@ -228,29 +213,6 @@ export function Cities() {
               <option value={formData.state}>{formData.state}</option>
             )}
           </Select>
-          <Input
-            type="number"
-            label="Delivery Radius (km)"
-            placeholder="Enter delivery radius in km"
-            value={formData.radius}
-            onChange={e => setFormData({...formData, radius: Number(e.target.value)})}
-            min="1"
-            max="100"
-          />
-          <div className="flex gap-3">
-            <Input
-              type="time"
-              label="Opening Time"
-              value={formData.hours.open}
-              onChange={e => setFormData({...formData, hours: {...formData.hours, open: e.target.value}})}
-            />
-            <Input
-              type="time"
-              label="Closing Time"
-              value={formData.hours.close}
-              onChange={e => setFormData({...formData, hours: {...formData.hours, close: e.target.value}})}
-            />
-          </div>
           <p className="text-xs text-gray-500">
             Active cities appear on the delivery partner app when they register and choose a city.
           </p>

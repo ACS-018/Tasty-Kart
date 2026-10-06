@@ -2,7 +2,7 @@ name: tastykart_deliveryboy
 description: "TastyKart delivery partner app."
 publish_to: "none"
 
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: ^3.9.2
@@ -31,6 +31,7 @@ dependencies:
   image_picker: ^1.1.2
   qr_flutter: ^4.1.0
   video_player: ^2.10.0
+  just_audio: ^0.9.40  # Audio player for buzzer/notification sounds
   
   # Network
   http: ^1.4.0
@@ -44,6 +45,7 @@ dependencies:
   # Local Storage & State
   shared_preferences: ^2.3.5
   flutter_local_notifications: ^18.0.1
+  package_info_plus: ^8.3.0
 
 dev_dependencies:
   flutter_test:
@@ -52,3 +54,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/new_order.mp3

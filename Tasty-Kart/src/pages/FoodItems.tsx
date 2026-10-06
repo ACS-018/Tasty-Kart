@@ -277,17 +277,6 @@ export function FoodItems() {
       ),
     },
     {
-      id: 'rating',
-      header: 'Rating',
-      cell: ({ row: { original: f } }) => (
-        <div className="flex items-center gap-1">
-          <Star size={12} className="text-amber-400 fill-amber-400" />
-          <span className="text-sm font-medium">{f.rating}</span>
-          <span className="text-xs text-gray-400">({f.totalRatings})</span>
-        </div>
-      ),
-    },
-    {
       accessorKey: 'status',
       header: 'Status',
       cell: ({ row }) => <StatusBadge status={row.original.status} />,

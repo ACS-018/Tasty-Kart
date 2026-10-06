@@ -171,6 +171,27 @@ export function Orders() {
   const filtered = filterStatus === 'all' ? ordersList : ordersList.filter(o => o.status === filterStatus)
 
   const handleAutoAssign = async (order: Order, options?: { silent?: boolean }) => {
+    // Safety check: Don't assign cancelled, refunded, or delivered orders
+    const excludedStatuses = ['cancelled', 'refunded', 'delivered']
+    if (excludedStatuses.includes(order.status)) {
+      if (!options?.silent) {
+        showError('Cannot Assign', `Cannot assign ${order.status} orders`)
+      }
+      return
+    }
+
+    // Safety check: Don't assign payment placeholder orders (online payment not yet verified)
+    const isPaymentPlaceholder =
+      (order as any).isPlaceholder === true ||
+      ((order as any).paymentVerified === false &&
+        (order as any).paymentStatus === 'pending_razorpay')
+    if (isPaymentPlaceholder) {
+      if (!options?.silent) {
+        showError('Cannot Assign', 'Payment not yet verified — waiting for customer to complete payment')
+      }
+      return
+    }
+
     // Try coords from the order doc first; fall back to fetching the restaurant doc.
     let lat = order.restaurantLat
     let lng = order.restaurantLng
@@ -240,9 +261,23 @@ export function Orders() {
   useEffect(() => {
     const timers: ReturnType<typeof setTimeout>[] = []
     ordersList.forEach(order => {
+      // Only auto-assign orders that are:
+      // 1. pending or accepted status
+      // 2. not already assigned to a delivery partner
+      // 3. NOT cancelled, refunded, or delivered
+      // 4. NOT a payment placeholder (online payment not yet verified)
+      const assignableStatuses = ['pending', 'accepted']
+      const excludedStatuses = ['cancelled', 'refunded', 'delivered']
+      const isPaymentPlaceholder =
+        (order as any).isPlaceholder === true ||
+        ((order as any).paymentVerified === false &&
+          (order as any).paymentStatus === 'pending_razorpay')
+
       if (
-        (order.status === 'pending' || order.status === 'accepted') &&
-        !order.deliveryPartnerId
+        assignableStatuses.includes(order.status) &&
+        !excludedStatuses.includes(order.status) &&
+        !order.deliveryPartnerId &&
+        !isPaymentPlaceholder
       ) {
         // Include the denied partner so each rejection produces a unique key,
         // allowing a fresh assignment attempt to be queued.
@@ -321,16 +356,34 @@ export function Orders() {
     {
       accessorKey: 'status',
       header: 'Status',
-      cell: ({ row }) => (
-        <div className="flex items-center gap-1.5">
-          <StatusBadge status={row.original.status} />
-          {(row.original as any).refundAmount > 0 && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
-              ₹{(row.original as any).refundAmount} refunded
-            </span>
-          )}
-        </div>
-      ),
+      cell: ({ row }) => {
+        const order = row.original
+        // Show "Assigned" (awaiting acceptance) when a partner is assigned but
+        // hasn't accepted yet — the raw status is 'accepted' at this point but
+        // that's misleading because the partner hasn't confirmed.
+        // Show "Awaiting Payment" for online payment placeholders.
+        const isPaymentPlaceholder =
+          (order as any).isPlaceholder === true ||
+          ((order as any).paymentVerified === false &&
+            (order as any).paymentStatus === 'pending_razorpay')
+        const displayStatus = isPaymentPlaceholder
+          ? 'awaiting_payment'
+          : (order.status === 'accepted' || order.status === 'pending') &&
+            !order.partnerAccepted &&
+            order.deliveryPartnerId
+          ? 'assigned'
+          : order.status
+        return (
+          <div className="flex items-center gap-1.5">
+            <StatusBadge status={displayStatus} />
+            {(order as any).refundAmount > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                ₹{(order as any).refundAmount} refunded
+              </span>
+            )}
+          </div>
+        )
+      },
     },
     {
       accessorKey: 'createdAt',
@@ -433,7 +486,13 @@ export function Orders() {
               <div className="flex items-center justify-between mb-1">
                 <span className="font-bold text-lg text-gray-900">{selected.orderNumber}</span>
                 <div className="flex items-center gap-2">
-                  <StatusBadge status={selected.status} />
+                  <StatusBadge status={
+                    (selected.status === 'accepted' || selected.status === 'pending') &&
+                    !selected.partnerAccepted &&
+                    selected.deliveryPartnerId
+                      ? 'assigned'
+                      : selected.status
+                  } />
                   {(selected as any).refundAmount > 0 && (
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
                       ✓ ₹{(selected as any).refundAmount} refunded
@@ -693,12 +752,11 @@ function RefundModal({ order, onClose, onSuccess, onError }: RefundModalProps) {
   const [customAmount, setCustomAmount] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // Total the customer actually paid (online/cash) = order.total
-  // Wallet credit they spent = order.walletUsed
-  // Full refund = both combined, so they get everything back as wallet credit
-  const paidAmount   = Number(order.total)                    || 0
+  // Only refund the online payment amount (order.total)
+  // Wallet credit used should NOT be refunded back
+  const paidAmount   = Number(order.total) || 0
   const walletSpent  = Number((order as any).walletUsed ?? 0) || 0
-  const maxAmount    = paidAmount + walletSpent                    // true full refund
+  const maxAmount    = paidAmount  // Only refund online payment, not wallet credit
 
   const resolvedAmount = mode === 'full'
     ? maxAmount
@@ -753,17 +811,22 @@ function RefundModal({ order, onClose, onSuccess, onError }: RefundModalProps) {
         {/* Order total info */}
         <div className="bg-gray-50 rounded-xl p-3 space-y-1.5 text-sm">
           <div className="flex items-center justify-between">
-            <span className="text-gray-500">Amount Paid</span>
+            <span className="text-gray-500">Online Payment</span>
             <span className="font-bold text-gray-900">{formatCurrency(paidAmount)}</span>
           </div>
           {walletSpent > 0 && (
-            <div className="flex items-center justify-between">
-              <span className="text-blue-600">Wallet Used</span>
-              <span className="font-bold text-blue-600">{formatCurrency(walletSpent)}</span>
-            </div>
+            <>
+              <div className="flex items-center justify-between">
+                <span className="text-blue-600">Wallet Used</span>
+                <span className="font-bold text-blue-600">{formatCurrency(walletSpent)}</span>
+              </div>
+              <p className="text-[10px] text-blue-600 bg-blue-50 rounded px-2 py-1">
+                ℹ️ Wallet credit will NOT be refunded (already in wallet)
+              </p>
+            </>
           )}
           <div className="flex items-center justify-between border-t border-gray-200 pt-1.5">
-            <span className="text-gray-700 font-semibold">Full Refund Total</span>
+            <span className="text-gray-700 font-semibold">Refund Amount</span>
             <span className="font-black text-gray-900">{formatCurrency(maxAmount)}</span>
           </div>
         </div>
@@ -807,7 +870,7 @@ function RefundModal({ order, onClose, onSuccess, onError }: RefundModalProps) {
               />
             </div>
             {Number(customAmount) > maxAmount && (
-              <p className="text-xs text-red-500 mt-1">Cannot exceed {formatCurrency(maxAmount)} (paid + wallet used)</p>
+              <p className="text-xs text-red-500 mt-1">Cannot exceed {formatCurrency(maxAmount)} (online payment only)</p>
             )}
           </div>
         )}

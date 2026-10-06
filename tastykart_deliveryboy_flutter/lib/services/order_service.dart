@@ -207,6 +207,8 @@ class OrderService {
   // ============ Order Actions with Analytics ============
 
   /// Accept order assignment
+  /// Accept an order assignment — marks the partner as actively working
+  /// the order and transitions the order status to 'accepted'.
   static Future<void> accept({
     required DeliveryOrder order,
     required String partnerId,
@@ -222,6 +224,7 @@ class OrderService {
             'deliveryPartnerId': partnerId,
             'deliveryPartnerName': partnerName,
             'partnerAccepted': true,
+            'status': 'accepted',
             'deliveryStage': DeliveryStage.toRestaurant,
             'pickupCode': _pickupCodeFor(order),
             'updatedAt': FieldValue.serverTimestamp(),
@@ -259,12 +262,15 @@ class OrderService {
     required String reason,
   }) async {
     try {
+      // Clear order assignment and reset to pending
       await _orders.doc(order.id).set({
         // Clear the assignment so the order is free to be reassigned.
         'deliveryPartnerId': '',
         'deliveryPartnerName': '',
         'partnerAccepted': false,
         'deliveryStage': FieldValue.delete(),
+        // Reset status to pending so auto-assignment can pick it up
+        'status': 'pending',
         // Track all rejecting partners so they are excluded from reassignment.
         'deniedPartnerId': partnerId,
         'deniedPartnerIds': FieldValue.arrayUnion([partnerId]),
@@ -274,6 +280,16 @@ class OrderService {
         'needsReassignment': true,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      // Reset partner status back to online so they can receive new orders
+      await FirebaseFirestore.instance
+          .collection('deliveryPartners')
+          .doc(partnerId)
+          .set({
+            'status': 'online',
+            'currentOrder': FieldValue.delete(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
 
       // Track analytics
       await AnalyticsService.logOrderDenied(
@@ -295,10 +311,12 @@ class OrderService {
     }
   }
 
-  /// Mark arrived at restaurant
+  /// Mark arrived at restaurant — transitions order status to 'preparing'
+  /// so the admin filter tab shows it correctly.
   static Future<void> arriveAtRestaurant(DeliveryOrder order) async {
     try {
       await _orders.doc(order.id).set({
+        'status': 'preparing',
         'deliveryStage': DeliveryStage.preparing,
         'partnerArrivedRestaurant': true,
         'updatedAt': FieldValue.serverTimestamp(),

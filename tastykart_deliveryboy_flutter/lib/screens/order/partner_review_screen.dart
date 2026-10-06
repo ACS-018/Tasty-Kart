@@ -44,11 +44,11 @@ class _PartnerReviewScreenState extends State<PartnerReviewScreen> {
     }
     setState(() => _saving = true);
     try {
+      final db = FirebaseFirestore.instance;
+
+      // 1. Write the review document.
       final id = 'rev_${widget.partner.id}_${widget.order.id}';
-      await FirebaseFirestore.instance
-          .collection(FirestorePaths.reviews)
-          .doc(id)
-          .set({
+      await db.collection(FirestorePaths.reviews).doc(id).set({
         'id': id,
         'reviewerName': widget.partner.name.trim().isEmpty
             ? 'Delivery partner'
@@ -65,6 +65,38 @@ class _PartnerReviewScreenState extends State<PartnerReviewScreen> {
         'restaurantName': widget.order.restaurantName,
         'createdAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      // 2. Atomically update the restaurant's aggregate rating so the
+      //    admin panel (which reads averageRating / totalReviews from the
+      //    restaurant doc) reflects this delivery-partner review.
+      if (widget.order.restaurantId.isNotEmpty) {
+        final restaurantRef = db
+            .collection(FirestorePaths.restaurants)
+            .doc(widget.order.restaurantId);
+
+        await db.runTransaction((txn) async {
+          final snap = await txn.get(restaurantRef);
+          final data = snap.data() ?? {};
+          final currentSum = (data['ratingSum'] as num? ?? 0).toDouble();
+          final currentTotal = (data['totalReviews'] as num? ?? 0).toInt();
+
+          final newTotal = currentTotal + 1;
+          final newSum = currentSum + _stars;
+          final newAverage = double.parse(
+            (newSum / newTotal).toStringAsFixed(1),
+          );
+
+          txn.set(restaurantRef, {
+            'ratingSum': newSum,
+            'totalReviews': newTotal,
+            'averageRating': newAverage,
+            // Keep legacy `rating` field in sync for older clients.
+            'rating': newAverage,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        });
+      }
+
       if (!mounted) return;
       AppFeedback.showSuccess(context, 'Review sent');
       _close();
@@ -114,7 +146,8 @@ class _PartnerReviewScreenState extends State<PartnerReviewScreen> {
               return IconButton(
                 onPressed: _saving
                     ? null
-                    : () => setState(() => _stars = _stars == i + 1 ? 0 : i + 1),
+                    : () =>
+                          setState(() => _stars = _stars == i + 1 ? 0 : i + 1),
                 icon: Icon(
                   Icons.star_rounded,
                   size: 36,
@@ -148,7 +181,10 @@ class _PartnerReviewScreenState extends State<PartnerReviewScreen> {
               child: Text(_saving ? 'Saving...' : 'Submit review'),
             ),
           ),
-          TextButton(onPressed: _saving ? null : _close, child: const Text('Skip')),
+          TextButton(
+            onPressed: _saving ? null : _close,
+            child: const Text('Skip'),
+          ),
         ],
       ),
     );

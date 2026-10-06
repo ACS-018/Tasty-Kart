@@ -7,6 +7,14 @@ class OnboardingController extends ChangeNotifier {
   String fullName = '';
   String dateOfBirth = '';
   String gender = '';
+  String vehicle = '';
+
+  /// Prefer in-session draft, then saved partner profile.
+  static String pickDraft(String draft, String saved) {
+    final d = draft.trim();
+    if (d.isNotEmpty) return d;
+    return saved.trim();
+  }
 
   void setPhone(String value) {
     phone = value.trim();
@@ -14,7 +22,7 @@ class OnboardingController extends ChangeNotifier {
   }
 
   void setCity(String value) {
-    city = value;
+    city = value.trim();
     notifyListeners();
   }
 
@@ -25,7 +33,12 @@ class OnboardingController extends ChangeNotifier {
   }) {
     fullName = name.trim();
     dateOfBirth = dob.trim();
-    gender = selectedGender;
+    gender = selectedGender.trim();
+    notifyListeners();
+  }
+
+  void setVehicle(String value) {
+    vehicle = value.trim();
     notifyListeners();
   }
 
@@ -35,6 +48,7 @@ class OnboardingController extends ChangeNotifier {
     fullName = '';
     dateOfBirth = '';
     gender = '';
+    vehicle = '';
     notifyListeners();
   }
 }

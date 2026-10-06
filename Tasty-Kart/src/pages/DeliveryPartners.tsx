@@ -9,6 +9,8 @@ import { Drawer } from '@/components/ui/Modal'
 import { type DeliveryPartner, type Order } from '@/data/dummy'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { useToast } from '@/components/ui/Toast'
+import { getFunctions, httpsCallable } from 'firebase/functions'
+import { app } from '@/lib/firebase'
 import { 
   subscribeToCollection, 
   approveDeliveryPartner, 
@@ -69,7 +71,26 @@ export function DeliveryPartners() {
   const [selected, setSelected] = useState<DeliveryPartner | null>(null)
   const [transactions, setTransactions] = useState<any[]>([])
   const [actionLoading, setActionLoading] = useState(false)
+  const [syncingTip, setSyncingTip] = useState(false)
   const { success, error: showError } = useToast()
+
+  const handleSyncTip = async (partnerId: string) => {
+    setSyncingTip(true)
+    try {
+      const fns = getFunctions(app, 'us-central1')
+      const backfill = httpsCallable<
+        { partnerId: string },
+        { success: boolean; totalTips: number; orderCount: number }
+      >(fns, 'backfillPartnerTipBalance')
+      const result = await backfill({ partnerId })
+      const { totalTips, orderCount } = result.data
+      success('Tip Balance Synced', `₹${totalTips} tip from ${orderCount} orders credited`)
+    } catch (err: any) {
+      showError('Sync Failed', err?.message || 'Could not sync tip balance')
+    } finally {
+      setSyncingTip(false)
+    }
+  }
 
   const weekStats = useMemo(() => {
     const start = weekStartMs()
@@ -87,8 +108,36 @@ export function DeliveryPartners() {
     return { trips: count, amount: incentiveFor(count, incentiveSlots) }
   }
 
+  /** Breaks down COD-delivered orders for a partner into the 3 money buckets. */
+  const partnerCodBreakdown = (partnerId: string) => {
+    const codOrders = orders.filter(o => {
+      if (o.status !== 'delivered') return false
+      if (o.deliveryPartnerId !== partnerId) return false
+      const pm = (o.paymentMethod || '').toLowerCase()
+      return pm.includes('cash') || pm.includes('cod')
+    })
+    return codOrders.reduce(
+      (acc, o) => {
+        const fee   = o.deliveryFee || 0
+        const tip   = (o as any).tip || 0
+        const total = o.total || 0
+        const orderAmt = Math.max(0, total - fee - tip)
+        return {
+          deliveryFeeTotal: acc.deliveryFeeTotal + fee,
+          tipTotal:         acc.tipTotal + tip,
+          orderAmtTotal:    acc.orderAmtTotal + orderAmt,
+          orderCount:       acc.orderCount + 1,
+        }
+      },
+      { deliveryFeeTotal: 0, tipTotal: 0, orderAmtTotal: 0, orderCount: 0 },
+    )
+  }
+
   const totalWallet = partnersList.reduce((sum, partner) => sum + (partner.pocketBalance || 0), 0)
   const totalIncentive = partnersList.reduce((sum, partner) => sum + partnerWeek(partner).amount, 0)
+  const totalTips = partnersList.reduce((sum, partner) => sum + ((partner as any).tipBalance || 0), 0)
+  const totalCash = partnersList.reduce((sum, partner) => sum + ((partner as any).cashInHand || 0), 0)
+  const totalEarnings = partnersList.reduce((sum, partner) => sum + (partner.earnings || 0), 0)
 
   // Quick stats
   const stats = [
@@ -96,13 +145,28 @@ export function DeliveryPartners() {
     { label: 'Online Now', value: partnersList.filter(p => p.status === 'online').length, icon: Bike, color: 'green' as const },
     { label: 'Approved', value: partnersList.filter(p => p.approved).length, icon: Shield, color: 'green' as const },
     { label: 'Pending Approval', value: partnersList.filter(p => !p.approved).length, icon: AlertTriangle, color: 'amber' as const },
-    { label: 'Total Wallet', value: formatCurrency(totalWallet), icon: Wallet, color: 'blue' as const },
+    { label: 'Total Earnings', value: formatCurrency(totalEarnings), icon: DollarSign, color: 'green' as const },
+    { label: 'Total Pocket Balance', value: formatCurrency(totalWallet), icon: Wallet, color: 'blue' as const },
+    { label: 'Total Tips', value: formatCurrency(totalTips), icon: DollarSign, color: 'amber' as const },
+    { label: 'Total Cash in Hand', value: formatCurrency(totalCash), icon: CreditCard, color: 'green' as const },
     { label: 'Weekly Incentives', value: formatCurrency(totalIncentive), icon: Award, color: 'amber' as const },
   ]
 
   useEffect(() => {
     const unsubs = [
       subscribeToCollection<DeliveryPartner>('deliveryPartners', (data) => {
+        // Sort by creation date descending (newest first)
+        const toMs = (val: any): number => {
+          if (!val) return 0
+          if (typeof val === 'string' || typeof val === 'number') return new Date(val).getTime() || 0
+          if (typeof val === 'object' && typeof val.toDate === 'function') return val.toDate().getTime()
+          if (typeof val === 'object' && typeof val.seconds === 'number') return val.seconds * 1000
+          return 0
+        }
+        data.sort((a, b) => {
+          // Primary sort: newest created at top (most recent first)
+          return toMs(b.joinedDate || (b as any).createdAt) - toMs(a.joinedDate || (a as any).createdAt)
+        })
         setPartnersList(data)
         setLoading(false)
       }),
@@ -219,9 +283,23 @@ export function DeliveryPartners() {
     },
     {
       id: 'wallet',
-      header: 'Wallet',
+      header: 'Pocket Balance',
       cell: ({ row }) => (
         <span className="text-sm font-semibold text-gray-900">{formatCurrency(row.original.pocketBalance || 0)}</span>
+      ),
+    },
+    {
+      id: 'tips',
+      header: 'Tips',
+      cell: ({ row }) => (
+        <span className="text-sm font-semibold text-purple-600">{formatCurrency((row.original as any).tipBalance || 0)}</span>
+      ),
+    },
+    {
+      id: 'cashInHand',
+      header: 'Cash in Hand',
+      cell: ({ row }) => (
+        <span className="text-sm font-semibold text-green-600">{formatCurrency((row.original as any).cashInHand || 0)}</span>
       ),
     },
     {
@@ -262,7 +340,7 @@ export function DeliveryPartners() {
     <div className="space-y-6 pb-8">
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {stats.map((stat, i) => {
           const colors = colorMap[stat.color]
           return (
@@ -330,8 +408,10 @@ export function DeliveryPartners() {
               {[
                 { label: 'Rating', value: `⭐ ${selected.rating || 0}`, icon: Star },
                 { label: 'Deliveries', value: selected.completedOrders?.toString() || '0', icon: Bike },
-                { label: 'Earnings', value: formatCurrency(selected.earnings || 0), icon: DollarSign },
-                { label: 'Wallet', value: formatCurrency(selected.pocketBalance || 0), icon: Wallet },
+                { label: 'Total Earnings', value: formatCurrency(selected.earnings || 0), icon: DollarSign },
+                { label: 'Pocket Balance', value: formatCurrency(selected.pocketBalance || 0), icon: Wallet },
+                { label: 'Tips', value: formatCurrency((selected as any).tipBalance || 0), icon: DollarSign },
+                { label: 'Cash in Hand', value: formatCurrency((selected as any).cashInHand || 0), icon: CreditCard },
                 { label: 'Incentive', value: formatCurrency(partnerWeek(selected).amount), icon: Award },
                 { label: 'Accept Rate', value: `${selected.acceptRate || 0}%`, icon: TrendingUp },
                 { label: 'Cancelled', value: selected.cancelledOrders?.toString() || '0', icon: XCircle },
@@ -365,7 +445,135 @@ export function DeliveryPartners() {
               </div>
             </div>
 
-            {/* Location Info */}
+            {/* Tip Balance */}
+            <div className="rounded-xl p-4 bg-purple-50 border border-purple-100">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <DollarSign size={16} className="text-purple-600" />
+                  <div>
+                    <p className="text-xs font-semibold text-purple-700 uppercase tracking-wider">Tip Balance</p>
+                    <p className="text-2xl font-black text-gray-900 mt-0.5">
+                      {formatCurrency((selected as any).tipBalance || 0)}
+                    </p>
+                    <p className="text-xs text-purple-600 mt-0.5">Tips from customers — partner's money</p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={syncingTip}
+                  onClick={() => handleSyncTip(selected.id)}
+                  icon={syncingTip ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                >
+                  {syncingTip ? 'Syncing…' : 'Sync'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Cash in Hand — COD Earnings Breakdown */}
+            {(() => {
+              const cod = partnerCodBreakdown(selected.id)
+              const cashInHand = (selected as any).cashInHand || 0
+              return (
+                <div className="rounded-xl border border-orange-200 bg-orange-50 overflow-hidden">
+                  {/* Header */}
+                  <div className="flex items-center gap-2 px-4 pt-4 pb-2">
+                    <CreditCard size={16} className="text-orange-600" />
+                    <p className="text-xs font-semibold text-orange-700 uppercase tracking-wider">COD Cash Breakdown</p>
+                  </div>
+
+                  {/* Stacked bar */}
+                  {cod.orderCount > 0 && (() => {
+                    const grandTotal = cod.deliveryFeeTotal + cod.tipTotal + cod.orderAmtTotal
+                    const feePct   = grandTotal > 0 ? (cod.deliveryFeeTotal / grandTotal) * 100 : 0
+                    const tipPct   = grandTotal > 0 ? (cod.tipTotal / grandTotal) * 100 : 0
+                    const adminPct = grandTotal > 0 ? (cod.orderAmtTotal / grandTotal) * 100 : 0
+                    return (
+                      <div className="mx-4 mb-3">
+                        <div className="flex h-2 rounded-full overflow-hidden bg-gray-200">
+                          {feePct > 0   && <div style={{ width: `${feePct}%` }}   className="bg-green-500" />}
+                          {tipPct > 0   && <div style={{ width: `${tipPct}%` }}   className="bg-purple-500" />}
+                          {adminPct > 0 && <div style={{ width: `${adminPct}%` }} className="bg-orange-500" />}
+                        </div>
+                        <div className="flex gap-3 mt-1.5">
+                          <span className="flex items-center gap-1 text-[10px] text-green-700"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" />Fee</span>
+                          <span className="flex items-center gap-1 text-[10px] text-purple-700"><span className="w-2 h-2 rounded-full bg-purple-500 inline-block" />Tip</span>
+                          <span className="flex items-center gap-1 text-[10px] text-orange-700"><span className="w-2 h-2 rounded-full bg-orange-500 inline-block" />TastyKart</span>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* 3 buckets */}
+                  <div className="grid grid-cols-3 divide-x divide-orange-200 border-t border-orange-200">
+                    <div className="px-3 py-3">
+                      <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide">Delivery Fee</p>
+                      <p className="text-base font-black text-green-800 mt-0.5">{formatCurrency(cod.deliveryFeeTotal)}</p>
+                      <p className="text-[10px] text-green-600 mt-0.5">→ Pocket Balance</p>
+                    </div>
+                    <div className="px-3 py-3">
+                      <p className="text-[10px] font-semibold text-purple-700 uppercase tracking-wide">Tips</p>
+                      <p className="text-base font-black text-purple-800 mt-0.5">{formatCurrency(cod.tipTotal)}</p>
+                      <p className="text-[10px] text-purple-600 mt-0.5">→ Tip Balance</p>
+                    </div>
+                    <div className="px-3 py-3">
+                      <p className="text-[10px] font-semibold text-orange-700 uppercase tracking-wide">Order Amount</p>
+                      <p className="text-base font-black text-orange-800 mt-0.5">{formatCurrency(cashInHand)}</p>
+                      <p className="text-[10px] text-orange-600 mt-0.5">→ TastyKart (held)</p>
+                    </div>
+                  </div>
+
+                  {/* Footer note */}
+                  <div className="px-4 py-2.5 bg-orange-100 border-t border-orange-200">
+                    <p className="text-[11px] text-orange-700">
+                      <span className="font-semibold">Cash in Hand ({formatCurrency(cashInHand)})</span> = items + tax + platform fee from COD orders. This is TastyKart's money, not the partner's earnings.
+                    </p>
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* Financial Summary */}
+            <div className="bg-gradient-to-br from-blue-50 to-purple-50 rounded-xl p-4 border border-blue-200">
+              <div className="flex items-center gap-2 mb-3">
+                <DollarSign size={18} className="text-blue-600" />
+                <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Financial Summary</h4>
+              </div>
+              <div className="space-y-2.5">
+                <div className="flex justify-between items-center p-2 bg-white/60 rounded-lg">
+                  <span className="text-sm text-gray-600">Total Earnings (lifetime)</span>
+                  <span className="text-sm font-bold text-gray-900">{formatCurrency(selected.earnings || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-white/60 rounded-lg">
+                  <span className="text-sm text-gray-600">Pocket Balance</span>
+                  <span className="text-sm font-bold text-blue-600">{formatCurrency(selected.pocketBalance || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-white/60 rounded-lg">
+                  <span className="text-sm text-gray-600">Tip Balance</span>
+                  <span className="text-sm font-bold text-purple-600">{formatCurrency((selected as any).tipBalance || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-orange-50 rounded-lg border border-orange-200">
+                  <div>
+                    <span className="text-sm text-gray-600">Cash in Hand</span>
+                    <p className="text-[10px] text-orange-600 leading-none mt-0.5">Order amount only (TastyKart's money — not partner's)</p>
+                  </div>
+                  <span className="text-sm font-bold text-orange-600">{formatCurrency((selected as any).cashInHand || 0)}</span>
+                </div>
+                {/* Partner's own withdrawable money = Pocket + Tips only */}
+                <div className="flex justify-between items-center p-2 bg-blue-100 rounded-lg border-t-2 border-blue-300 mt-2">
+                  <div>
+                    <span className="text-sm font-semibold text-gray-900">Partner's Withdrawable</span>
+                    <p className="text-[10px] text-blue-600 leading-none mt-0.5">Pocket + Tips (excludes cash in hand)</p>
+                  </div>
+                  <span className="text-lg font-black text-blue-700">
+                    {formatCurrency(
+                      (selected.pocketBalance || 0) +
+                      ((selected as any).tipBalance || 0)
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
             {selected.currentLat && selected.currentLng && (
               <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
                 <div className="flex items-center gap-2 mb-2">

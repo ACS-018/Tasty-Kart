@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Eye, CheckCircle, XCircle, Clock } from 'lucide-react'
+import { Eye, CheckCircle, XCircle, Clock, TrendingUp, Wallet, Users, IndianRupee } from 'lucide-react'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -8,6 +8,7 @@ import { useToast } from '@/components/ui/Toast'
 import { useAuth } from '@/context/AuthContext'
 import { type DeliveryPartner } from '@/data/dummy'
 import { subscribeToCollection, reviewWithdrawalRequest } from '@/lib/firebaseService'
+import { formatCurrency } from '@/lib/utils'
 
 type FirestoreDoc = { id: string; [key: string]: any }
 
@@ -151,6 +152,22 @@ export function Payouts() {
     )
   })
 
+  const earningsStats = useMemo(() => {
+    // Include ALL partners (including blocked) in earnings calculations
+    const totalEarnings  = partners.reduce((sum, p) => sum + (Number(p.earnings) || Number((p as any).totalEarnings) || 0), 0)
+    // Wallet balance = pocketBalance + tipBalance (all earned, not yet withdrawn).
+    // Fall back to currentWalletBalance for partners that use the extended schema.
+    const totalWallet    = partners.reduce((sum, p) => {
+      const pocket = Number((p as any).pocketBalance) || 0
+      const tip    = Number((p as any).tipBalance)    || 0
+      const combined = pocket + tip
+      // If neither field is set, try the legacy/extended field.
+      return sum + (combined > 0 ? combined : (Number((p as any).currentWalletBalance) || 0))
+    }, 0)
+    const totalPending   = rows.filter(r => r.status === 'PENDING').reduce((sum, r) => sum + r.amount, 0)
+    return { totalEarnings, totalWallet, totalPending, count: partners.length }
+  }, [partners, rows])
+
   const stats = {
     pending: rows.filter(row => row.status === 'PENDING').length,
     approved: rows.filter(row => row.status === 'APPROVED').length,
@@ -198,6 +215,118 @@ export function Payouts() {
         title="Withdraw Requests"
         description="Requests from delivery partners. Pending until you approve them."
       />
+
+      {/* ── Partner Earnings Summary ── */}
+      <div>
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Partner Earnings Overview</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+          {[
+            { label: 'Total Partners',    value: earningsStats.count,                                icon: Users,        color: 'text-blue-600',   bg: 'bg-blue-50',   fmt: (v: number) => String(v) },
+            { label: 'All-time Earnings', value: earningsStats.totalEarnings,                        icon: TrendingUp,   color: 'text-green-600',  bg: 'bg-green-50',  fmt: formatCurrency },
+            { label: 'Wallet Balances',   value: earningsStats.totalWallet,                          icon: Wallet,       color: 'text-purple-600', bg: 'bg-purple-50', fmt: formatCurrency },
+            { label: 'Pending Payouts',   value: earningsStats.totalPending,                         icon: IndianRupee,  color: 'text-amber-600',  bg: 'bg-amber-50',  fmt: formatCurrency },
+          ].map(stat => (
+            <div key={stat.label} className={`${stat.bg} rounded-xl p-4 flex items-start gap-3`}>
+              <div className={`w-9 h-9 rounded-lg bg-white/60 flex items-center justify-center flex-shrink-0`}>
+                <stat.icon size={18} className={stat.color} />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">{stat.label}</p>
+                <p className="text-xl font-bold text-gray-900 mt-0.5">{stat.fmt(stat.value)}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Per-partner earnings breakdown */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
+          <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+            <h3 className="text-sm font-semibold text-gray-700">Per-Partner Earnings</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500">Partner</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500">Total Earnings</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500">Wallet Balance</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500">Deliveries</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {partners.length === 0 ? (
+                  <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-gray-400">No delivery partners found</td></tr>
+                ) : (
+                  [...partners]
+                    .sort((a, b) => (Number(b.earnings) || 0) - (Number(a.earnings) || 0))
+                    .map(p => {
+                      const earnings = Number(p.earnings) || Number((p as any).totalEarnings) || 0
+                      const pocket   = Number((p as any).pocketBalance) || 0
+                      const tip      = Number((p as any).tipBalance)    || 0
+                      const wallet   = pocket + tip > 0
+                        ? pocket + tip
+                        : (Number((p as any).currentWalletBalance) || 0)
+                      const isOnline = p.status === 'online' || p.status === 'available'
+                      return (
+                        <tr key={p.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-2.5">
+                            <p className="text-sm font-semibold text-gray-900">{p.name}</p>
+                            <p className="text-xs text-gray-400">{p.phone}</p>
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <span className="text-sm font-bold text-green-700">{formatCurrency(earnings)}</span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <span className="text-sm font-semibold text-purple-700">{formatCurrency(wallet)}</span>
+                            {tip > 0 && (
+                              <p className="text-[10px] text-gray-400 mt-0.5">
+                                {formatCurrency(pocket)} + {formatCurrency(tip)} tip
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <span className="text-sm text-gray-700">{p.completedOrders ?? 0}</span>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold ${
+                              p.status === 'blocked' ? 'bg-red-100 text-red-700' :
+                              isOnline ? 'bg-green-100 text-green-700' :
+                              p.status === 'busy' ? 'bg-blue-100 text-blue-700' :
+                              'bg-gray-100 text-gray-500'
+                            }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${
+                                isOnline ? 'bg-green-500' : p.status === 'busy' ? 'bg-blue-500' : 'bg-gray-400'
+                              }`} />
+                              {p.status ?? 'offline'}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })
+                )}
+              </tbody>
+              {partners.length > 0 && (
+                <tfoot className="bg-gray-50 border-t-2 border-gray-200">
+                  <tr>
+                    <td className="px-4 py-2.5 text-xs font-bold text-gray-700">Total ({partners.length} partners)</td>
+                    <td className="px-4 py-2.5 text-right text-sm font-black text-green-700">{formatCurrency(earningsStats.totalEarnings)}</td>
+                    <td className="px-4 py-2.5 text-right text-sm font-black text-purple-700">{formatCurrency(earningsStats.totalWallet)}</td>
+                    <td className="px-4 py-2.5 text-right text-sm font-bold text-gray-700">
+                      {partners.reduce((s, p) => s + (p.completedOrders ?? 0), 0)}
+                    </td>
+                    <td />
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Withdraw Requests ── */}
+      <div>
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Withdraw Requests</h2>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
@@ -283,42 +412,54 @@ export function Payouts() {
         </div>
       </div>
 
+      </div> {/* end withdraw requests */}
+
       <Modal open={!!selected} onClose={() => setSelected(null)} title="Withdraw Request" size="md">
-        {selected && (
-          <div className="space-y-4">
-            <div className="bg-blue-50 rounded-xl p-4">
-              <p className="text-xs text-gray-600 uppercase">Amount</p>
-              <p className="text-3xl font-bold text-gray-900 mt-2">₹{selected.amount.toLocaleString()}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: 'Partner', value: selected.partnerName },
-                { label: 'Phone', value: selected.phone || '—' },
-                { label: 'UPI', value: selected.upiId || '—' },
-                { label: 'Method', value: selected.method },
-                { label: 'Status', value: statusLabel(selected.status) },
-                { label: 'Requested', value: formatWhen(selected.requestedAt) },
-              ].map(item => (
-                <div key={item.label} className="bg-gray-50 rounded-lg p-3">
-                  <p className="text-xs text-gray-500">{item.label}</p>
-                  <p className="text-sm font-semibold text-gray-900 mt-1 break-all">{item.value}</p>
+        {selected && (() => {
+          // Find the current state of this request from the rows array
+          const currentRow = rows.find(r => r.id === selected.id) || selected
+          return (
+            <div className="space-y-4">
+              <div className="bg-blue-50 rounded-xl p-4">
+                <p className="text-xs text-gray-600 uppercase">Amount</p>
+                <p className="text-3xl font-bold text-gray-900 mt-2">₹{currentRow.amount.toLocaleString()}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: 'Partner', value: currentRow.partnerName },
+                  { label: 'Phone', value: currentRow.phone || '—' },
+                  { label: 'UPI', value: currentRow.upiId || '—' },
+                  { label: 'Method', value: currentRow.method },
+                  { label: 'Status', value: statusLabel(currentRow.status) },
+                  { label: 'Requested', value: formatWhen(currentRow.requestedAt) },
+                ].map(item => (
+                  <div key={item.label} className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-xs text-gray-500">{item.label}</p>
+                    <p className="text-sm font-semibold text-gray-900 mt-1 break-all">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+              {currentRow.status === 'REJECTED' && currentRow.rejectionReason && (
+                <div className="bg-red-50 rounded-lg p-3 border border-red-200">
+                  <p className="text-xs text-red-600 font-semibold mb-1">Rejection reason</p>
+                  <p className="text-sm text-red-700">{currentRow.rejectionReason}</p>
                 </div>
-              ))}
+              )}
+              {currentRow.status === 'APPROVED' && (
+                <div className="bg-green-50 rounded-lg p-3 border border-green-200">
+                  <p className="text-xs text-green-600 font-semibold mb-1">✓ Approved</p>
+                  <p className="text-sm text-green-700">This withdrawal request has been approved</p>
+                </div>
+              )}
+              {currentRow.status === 'PENDING' && (
+                <div className="flex gap-2 justify-end pt-3 border-t">
+                  <Button variant="danger" type="button" onClick={() => setActionModal({ type: 'REJECT', row: currentRow })}>Reject</Button>
+                  <Button type="button" onClick={() => setActionModal({ type: 'APPROVE', row: currentRow })}>Approve</Button>
+                </div>
+              )}
             </div>
-            {selected.status === 'REJECTED' && selected.rejectionReason && (
-              <div className="bg-red-50 rounded-lg p-3 border border-red-200">
-                <p className="text-xs text-red-600 font-semibold mb-1">Rejection reason</p>
-                <p className="text-sm text-red-700">{selected.rejectionReason}</p>
-              </div>
-            )}
-            {selected.status === 'PENDING' && (
-              <div className="flex gap-2 justify-end pt-3 border-t">
-                <Button variant="danger" type="button" onClick={() => setActionModal({ type: 'REJECT', row: selected })}>Reject</Button>
-                <Button type="button" onClick={() => setActionModal({ type: 'APPROVE', row: selected })}>Approve</Button>
-              </div>
-            )}
-          </div>
-        )}
+          )
+        })()}
       </Modal>
 
       <Modal open={!!actionModal} onClose={() => { setActionModal(null); setReason('') }} title={actionModal?.type === 'APPROVE' ? 'Approve withdrawal' : 'Reject withdrawal'} size="sm">

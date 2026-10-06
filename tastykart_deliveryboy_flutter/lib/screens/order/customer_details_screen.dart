@@ -7,10 +7,12 @@ import '../../models/delivery_order.dart';
 import '../../models/delivery_partner.dart';
 import '../../services/delivery_partner_service.dart';
 import '../../services/order_service.dart';
+import '../../services/transaction_service.dart';
 import '../../utils/app_feedback.dart';
 import '../../utils/formatters.dart';
 import 'cancel_order_sheet.dart';
 import 'order_chat_screen.dart';
+import 'partner_review_screen.dart';
 import 'select_payment_screen.dart';
 
 class CustomerDetailsScreen extends StatefulWidget {
@@ -127,9 +129,58 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       return;
     }
 
-    // OTP correct — navigate to payment/completion
-    if (!mounted) return;
     AppFeedback.light();
+
+    // When payment is already done online (prepaid) or there is nothing to collect,
+    // skip the payment screen and complete delivery directly.
+    if (widget.order.isOnlinePaid || widget.order.total <= 0) {
+      if (!mounted) return;
+      setState(() => _busy = true);
+      try {
+        await OrderService.completeDelivery(
+          order: widget.order,
+          partnerId: widget.partner.id,
+          collectedVia: widget.order.isOnlinePaid ? 'online' : 'none',
+        );
+        await DeliveryPartnerService.completeTrip(
+          partnerId: widget.partner.id,
+          payout: widget.order.payout,
+          tip: widget.order.tip,
+        );
+        try {
+          await TransactionService.add(
+            partnerId: widget.partner.id,
+            type: 'order',
+            title: 'From Order ${widget.order.displayOrderNumber}',
+            amount: widget.order.payout,
+            method: 'wallet',
+            orderNumber: widget.order.orderNumber,
+          );
+        } catch (_) {}
+        if (mounted) {
+          AppFeedback.showSuccess(context, 'Delivery completed');
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (_) => PartnerReviewScreen(
+                order: widget.order,
+                partner: widget.partner,
+              ),
+            ),
+            (route) => route.isFirst,
+          );
+        }
+      } catch (_) {
+        if (mounted) {
+          AppFeedback.showError(context, 'Could not complete delivery');
+        }
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      return;
+    }
+
+    // OTP correct and amount > 0 (COD) — navigate to payment screen
+    if (!mounted) return;
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -288,6 +339,40 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
                   ),
                 ),
                 const SizedBox(height: 28),
+
+                // ── Payment status info for online paid orders ──────
+                if (order.isOnlinePaid)
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    margin: const EdgeInsets.only(bottom: 20),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE8F5E9),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AppColors.success.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.check_circle_outline_rounded,
+                          color: AppColors.success,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            'Payment already completed online. No cash collection needed — just verify OTP and complete delivery.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF2E7D32),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                 // ── OTP instruction ────────────────────────────────
                 Container(

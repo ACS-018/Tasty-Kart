@@ -153,8 +153,8 @@ class _UploadDocumentsScreenState extends State<UploadDocumentsScreen> {
     }
   }
 
-  /// Back — clear vehicle AND uploaded documents so AuthGate steps back to
-  /// SelectVehicleScreen and the next time this screen is shown it starts fresh.
+  /// Back — step back to vehicle selection without clearing documents.
+  /// The documents will remain in Firestore so they can be shown again.
   Future<void> _onBack() async {
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
@@ -164,9 +164,7 @@ class _UploadDocumentsScreenState extends State<UploadDocumentsScreen> {
     if (user == null) return;
     try {
       final partnerId = await DeliveryPartnerService.docIdFor(user);
-      // Clear uploads so the screen starts fresh on the next registration attempt.
-      await DeliveryPartnerService.clearDocuments(partnerId: partnerId);
-      // Then step back to vehicle selection.
+      // Step back to vehicle selection without clearing documents.
       await DeliveryPartnerService.clearVehicle(partnerId: partnerId);
     } catch (_) {
       if (!mounted) return;
@@ -180,46 +178,46 @@ class _UploadDocumentsScreenState extends State<UploadDocumentsScreen> {
     final complete = _allUploaded;
 
     return OnboardingScaffold(
-        buttonLabel: 'Next',
-        isLoading: _marking,
-        buttonEnabled: !_uploading,
-        onPressed: _onNext,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            OnboardingTitleBlock(
-              title: complete ? 'Uploaded Documents' : 'Upload Document',
-              subtitle: complete
-                  ? 'Your Documents Are Uploaded'
-                  : 'Please Upload Clear And Valid Documents.',
-              showBack: true,
-              onBack: _onBack,
+      buttonLabel: 'Next',
+      isLoading: _marking,
+      buttonEnabled: !_uploading,
+      onPressed: _onNext,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          OnboardingTitleBlock(
+            title: complete ? 'Uploaded Documents' : 'Upload Document',
+            subtitle: complete
+                ? 'Your Documents Are Uploaded'
+                : 'Please Upload Clear And Valid Documents.',
+            showBack: true,
+            onBack: _onBack,
+          ),
+          SizedBox(
+            height: r.responsive(mobile: 12.0, tablet: 16.0, desktop: 20.0),
+          ),
+          Expanded(
+            child: ListView.separated(
+              padding: EdgeInsets.zero,
+              itemCount: AppConstants.documents.length,
+              separatorBuilder: (_, __) =>
+                  const Divider(height: 1, color: AppColors.divider),
+              itemBuilder: (context, index) {
+                final doc = AppConstants.documents[index];
+                final uploaded = _isUploaded(doc.id);
+                final isThisUploading = _uploadingId == doc.id;
+                return OnboardingNavTile(
+                  title: doc.title,
+                  subtitle: doc.subtitle,
+                  completed: uploaded,
+                  busy: isThisUploading,
+                  onTap: _uploading ? () {} : () => _pickAndUpload(doc),
+                );
+              },
             ),
-            SizedBox(
-              height: r.responsive(mobile: 12.0, tablet: 16.0, desktop: 20.0),
-            ),
-            Expanded(
-              child: ListView.separated(
-                padding: EdgeInsets.zero,
-                itemCount: AppConstants.documents.length,
-                separatorBuilder: (_, __) =>
-                    const Divider(height: 1, color: AppColors.divider),
-                itemBuilder: (context, index) {
-                  final doc = AppConstants.documents[index];
-                  final uploaded = _isUploaded(doc.id);
-                  final isThisUploading = _uploadingId == doc.id;
-                  return OnboardingNavTile(
-                    title: doc.title,
-                    subtitle: doc.subtitle,
-                    completed: uploaded,
-                    busy: isThisUploading,
-                    onTap: _uploading ? () {} : () => _pickAndUpload(doc),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
+      ),
     );
   }
 }

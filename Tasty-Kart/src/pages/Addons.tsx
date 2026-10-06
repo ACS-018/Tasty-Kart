@@ -1,121 +1,62 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
-import { Edit, Trash2, Plus, Eye, Store } from 'lucide-react'
+import { Edit, Trash2, Plus, AlertTriangle, Loader2 } from 'lucide-react'
 import { DataTable } from '@/components/shared/DataTable'
 import { StatusBadge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
-import { Modal, ConfirmDialog, Drawer } from '@/components/ui/Modal'
+import { Modal, ConfirmDialog } from '@/components/ui/Modal'
 import { Input, Select } from '@/components/ui/Input'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/Toast'
-import type { Addon, Restaurant } from '@/data/dummy'
+import type { Addon } from '@/data/dummy'
 import {
   subscribeToCollection,
   addDocumentToFirestore,
   updateDocumentInFirestore,
   deleteDocumentFromFirestore,
   deleteDuplicateAddons,
-  addonCatalogKey,
 } from '@/lib/firebaseService'
-
-type AddonGroup = {
-  key: string
-  name: string
-  price: number
-  status: 'active' | 'inactive'
-  category: string
-  description: string
-  foodItemId: string | null
-  docs: Addon[]
-  restaurantNames: string[]
-}
 
 export function Addons() {
   const [addonsList, setAddonsList] = useState<Addon[]>([])
-  const [restaurants, setRestaurants] = useState<Restaurant[]>([])
   const [showAdd, setShowAdd] = useState(false)
-  const [editItem, setEditItem] = useState<AddonGroup | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<AddonGroup | null>(null)
-  const [viewAddon, setViewAddon] = useState<AddonGroup | null>(null)
+  const [editItem, setEditItem] = useState<Addon | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Addon | null>(null)
   const [saving, setSaving] = useState(false)
+  const [isCleaning, setIsCleaning] = useState(false)
+  const [showCleanConfirm, setShowCleanConfirm] = useState(false)
   const { success, error: toastError } = useToast()
 
   const [formData, setFormData] = useState({
     name: '',
     price: '',
-    restaurantId: '',
+    category: 'Extras',
+    description: '',
     status: 'active' as 'active' | 'inactive',
   })
 
   useEffect(() => {
-    const unsubs = [
-      subscribeToCollection<Addon>('addons', setAddonsList),
-      subscribeToCollection<Restaurant>('restaurants', setRestaurants),
-    ]
-    deleteDuplicateAddons().catch(() => {})
-    return () => unsubs.forEach(fn => fn())
-  }, [])
-
-  const liveRestaurantIds = useMemo(() => new Set(restaurants.map(restaurant => restaurant.id)), [restaurants])
-
-  const catalog = useMemo(() => {
-    const liveNames = new Set(restaurants.map(restaurant => restaurant.name.trim().toLowerCase()))
-    return addonsList
-      .filter(addon => {
-        if (addon.restaurantId && liveRestaurantIds.has(addon.restaurantId)) return true
-        const name = (addon.restaurantName || '').trim().toLowerCase()
-        return name.length > 0 && liveNames.has(name)
-      })
-      .map(addon => {
-        const live = restaurants.find(restaurant => restaurant.id === addon.restaurantId)
-        const restaurantName = live?.name || addon.restaurantName || ''
-        return {
-          key: addon.id,
-          name: addon.name,
-          price: Number(addon.price) || 0,
-          status: addon.status === 'inactive' ? 'inactive' as const : 'active' as const,
-          category: addon.category || 'General',
-          description: addon.description || '',
-          foodItemId: addon.foodItemId ?? null,
-          docs: [addon],
-          restaurantNames: restaurantName ? [restaurantName] : [],
-        }
-      })
-      .sort((a, b) => a.name.localeCompare(b.name) || (a.restaurantNames[0] || '').localeCompare(b.restaurantNames[0] || ''))
-  }, [addonsList, restaurants, liveRestaurantIds])
-
-  const servingRestaurants = (group: AddonGroup) => {
-    const key = addonCatalogKey({ name: group.name, price: group.price })
-    const seen = new Set<string>()
-    return catalog.flatMap(row => {
-      if (addonCatalogKey({ name: row.name, price: row.price }) !== key) return []
-      const doc = row.docs[0]
-      if (!doc?.restaurantId || seen.has(doc.restaurantId)) return []
-      seen.add(doc.restaurantId)
-      const live = restaurants.find(restaurant => restaurant.id === doc.restaurantId)
-      return [{
-        id: doc.restaurantId,
-        name: live?.name || row.restaurantNames[0] || 'Restaurant',
-        cuisine: live?.cuisine || '',
-        city: live?.city || '',
-        logo: live?.logo,
-        status: live?.status || 'active',
-      }]
+    const unsub = subscribeToCollection<Addon>('addons', (data) => {
+      // Sort by name alphabetically
+      const sorted = [...data].sort((a, b) => a.name.localeCompare(b.name))
+      setAddonsList(sorted)
     })
-  }
+    return () => unsub()
+  }, [])
 
   const openAdd = () => {
     setEditItem(null)
-    setFormData({ name: '', price: '', restaurantId: restaurants[0]?.id || '', status: 'active' })
+    setFormData({ name: '', price: '', category: 'Extras', description: '', status: 'active' })
     setShowAdd(true)
   }
 
-  const openEdit = (addon: AddonGroup) => {
+  const openEdit = (addon: Addon) => {
     setEditItem(addon)
     setFormData({
       name: addon.name || '',
       price: String(addon.price || ''),
-      restaurantId: addon.docs[0]?.restaurantId || '',
+      category: addon.category || 'Extras',
+      description: addon.description || '',
       status: addon.status || 'active',
     })
     setShowAdd(true)
@@ -124,54 +65,49 @@ export function Addons() {
   const handleSave = async () => {
     if (!formData.name.trim()) { toastError('Validation', 'Add-on name is required'); return }
     if (!formData.price || parseFloat(formData.price) <= 0) { toastError('Validation', 'Price must be greater than 0'); return }
-    if (!formData.restaurantId) { toastError('Validation', 'Select a restaurant'); return }
-
-    const restaurant = restaurants.find(r => r.id === formData.restaurantId)
-    if (!editItem && !restaurant) { toastError('Validation', 'Select a valid restaurant'); return }
 
     const nextName = formData.name.trim()
     const nextPrice = parseFloat(formData.price)
-    const already = addonsList.find(addon =>
-      addon.restaurantId === (editItem?.docs[0]?.restaurantId || formData.restaurantId) &&
-      addonCatalogKey(addon) === addonCatalogKey({ name: nextName, price: nextPrice }) &&
-      addon.id !== editItem?.docs[0]?.id
+
+    // Check for duplicates
+    const duplicate = addonsList.find(addon =>
+      addon.name.toLowerCase() === nextName.toLowerCase() &&
+      addon.id !== editItem?.id
     )
-    if (already) {
-      toastError('Already exists', `"${nextName}" at this price is already in the add-on list`)
+    if (duplicate) {
+      toastError('Already exists', `"${nextName}" already exists in the add-ons list`)
       return
     }
 
     setSaving(true)
     try {
       if (editItem) {
-        const results = await Promise.all(editItem.docs.map(doc => updateDocumentInFirestore('addons', doc.id, {
+        const res = await updateDocumentInFirestore('addons', editItem.id, {
           name: nextName,
           price: nextPrice,
+          category: formData.category,
+          description: formData.description,
           status: formData.status,
-          category: editItem.category || 'General',
-          description: editItem.description || '',
-        })))
-        if (results.every(res => res.success)) {
-          success('Add-on Updated', `"${nextName}" updated`)
+        })
+        if (res.success) {
+          success('Add-on Updated', `"${nextName}" updated successfully`)
           setShowAdd(false)
         } else {
-          toastError('Update Failed', 'Could not update every copy of this add-on')
+          toastError('Update Failed', String(res.error))
         }
       } else {
-        const id = `add_${restaurant!.id}_${Date.now()}`
+        const id = `addon_${Date.now()}`
         const res = await addDocumentToFirestore('addons', {
           id,
           name: nextName,
           price: nextPrice,
-          restaurantId: restaurant!.id,
-          restaurantName: restaurant!.name,
-          foodItemId: null,
-          category: 'General',
+          category: formData.category,
+          description: formData.description,
           status: formData.status,
-          description: '',
+          createdAt: new Date().toISOString(),
         })
         if (res.success) {
-          success('Add-on Created', `"${nextName}" added for ${restaurant!.name}`)
+          success('Add-on Created', `"${nextName}" added successfully`)
           setShowAdd(false)
         } else {
           toastError('Create Failed', String(res.error))
@@ -186,22 +122,38 @@ export function Addons() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return
-    const results = await Promise.all(
-      deleteTarget.docs.map(doc => deleteDocumentFromFirestore('addons', doc.id)),
-    )
-    if (results.every(res => res.success)) {
-      success('Deleted', `"${deleteTarget.name}" removed`)
+    const res = await deleteDocumentFromFirestore('addons', deleteTarget.id)
+    if (res.success) {
+      success('Deleted', `"${deleteTarget.name}" removed successfully`)
     } else {
-      toastError('Delete Failed', 'Could not remove every copy of this add-on')
+      toastError('Delete Failed', String(res.error))
     }
     setDeleteTarget(null)
+  }
+
+  const handleCleanupDuplicates = async () => {
+    setIsCleaning(true)
+    setShowCleanConfirm(false)
+    try {
+      const result = await deleteDuplicateAddons()
+      success(
+        'Duplicates Removed',
+        result.deleted > 0
+          ? `${result.deleted} duplicate add-on(s) deleted`
+          : 'No duplicates found — already clean'
+      )
+    } catch (err: unknown) {
+      toastError('Error', String(err))
+    } finally {
+      setIsCleaning(false)
+    }
   }
 
   const setField = (key: keyof typeof formData, value: string) => {
     setFormData(prev => ({ ...prev, [key]: value }))
   }
 
-  const columns: ColumnDef<AddonGroup, unknown>[] = [
+  const columns: ColumnDef<Addon, unknown>[] = [
     {
       accessorKey: 'name',
       header: 'Add-on Name',
@@ -211,30 +163,6 @@ export function Addons() {
           <span className="text-sm font-semibold text-gray-900">{row.original.name}</span>
         </div>
       ),
-    },
-    {
-      id: 'restaurants',
-      header: 'Restaurants',
-      accessorFn: (row) => servingRestaurants(row).length,
-      cell: ({ row }) => {
-        const count = servingRestaurants(row.original).length
-        return (
-          <div className="flex items-center gap-2">
-            <span className={`text-sm font-bold ${count > 0 ? 'text-gray-900' : 'text-gray-400'}`}>
-              {count}
-            </span>
-            {count > 0 && (
-              <button
-                type="button"
-                onClick={() => setViewAddon(row.original)}
-                className="flex items-center gap-1 text-xs font-semibold text-[#B32B2C] hover:text-[#8B1F20] transition-colors"
-              >
-                <Eye size={13} /> View All
-              </button>
-            )}
-          </div>
-        )
-      },
     },
     {
       accessorKey: 'price',
@@ -260,10 +188,26 @@ export function Addons() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-end gap-2 flex-wrap">
-        <Button size="sm" icon={<Plus size={14} />} onClick={openAdd}>Add Add-on</Button>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Add-ons</h1>
+          <p className="text-sm text-gray-500 mt-1">Manage add-ons catalog</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={isCleaning ? <Loader2 size={14} className="animate-spin" /> : <AlertTriangle size={14} />}
+            onClick={() => setShowCleanConfirm(true)}
+            disabled={isCleaning}
+          >
+            {isCleaning ? 'Removing…' : 'Remove Duplicates'}
+          </Button>
+          <Button size="sm" icon={<Plus size={14} />} onClick={openAdd}>Add Add-on</Button>
+        </div>
       </div>
-      <DataTable data={catalog} columns={columns} searchPlaceholder="Search add-ons..." />
+      
+      <DataTable data={addonsList} columns={columns} searchPlaceholder="Search add-ons..." />
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title={editItem ? 'Edit Add-on' : 'Add New Add-on'} size="sm">
         <div className="space-y-4">
@@ -281,22 +225,12 @@ export function Addons() {
             value={formData.price}
             onChange={e => setField('price', e.target.value)}
           />
-          <Select
-            label="Restaurant *"
-            value={formData.restaurantId}
-            onChange={e => setField('restaurantId', e.target.value)}
-            disabled={!!editItem && editItem.docs.length > 1}
-          >
-            <option value="">Select restaurant</option>
-            {restaurants.map(r => (
-              <option key={r.id} value={r.id}>{r.name}</option>
-            ))}
-          </Select>
-          {editItem && editItem.restaurantNames.length > 1 && (
-            <p className="text-xs text-gray-500 -mt-2">
-              This add-on is on {editItem.restaurantNames.length} restaurants. Saving updates the name, price, and status on all of them.
-            </p>
-          )}
+          <Input
+            label="Description"
+            placeholder="Optional description"
+            value={formData.description}
+            onChange={e => setField('description', e.target.value)}
+          />
           <Select
             label="Status"
             value={formData.status}
@@ -314,56 +248,23 @@ export function Addons() {
         </div>
       </Modal>
 
-      <Drawer
-        open={!!viewAddon}
-        onClose={() => setViewAddon(null)}
-        title={viewAddon ? `${viewAddon.name} — Restaurants` : ''}
-        width="w-[480px]"
-      >
-        {viewAddon && (() => {
-          const serving = servingRestaurants(viewAddon)
-          return (
-            <div className="space-y-3">
-              <p className="text-sm text-gray-500">{serving.length} restaurant{serving.length === 1 ? '' : 's'} serving this add-on</p>
-              {serving.map(restaurant => (
-                <div key={restaurant.id} className="flex items-center gap-4 p-4 bg-white rounded-xl border border-gray-100 shadow-sm">
-                  <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 shrink-0">
-                    {restaurant.logo ? (
-                      <img src={restaurant.logo} alt={restaurant.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-red-50">
-                        <Store size={24} className="text-[#B32B2C]" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-gray-900 truncate">{restaurant.name}</p>
-                    <p className="text-xs text-gray-500 truncate">{restaurant.cuisine || 'Multi-Cuisine'}</p>
-                    <div className="flex items-center gap-3 mt-1">
-                      {restaurant.city && <span className="text-xs text-gray-400">{restaurant.city}</span>}
-                      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                        restaurant.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
-                      }`}>
-                        {restaurant.status}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        })()}
-      </Drawer>
-
-      <ConfirmDialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)}
+      <ConfirmDialog 
+        open={!!deleteTarget} 
+        onClose={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
         title="Delete Add-on"
-        message={
-          deleteTarget && deleteTarget.docs.length > 1
-            ? `Permanently delete "${deleteTarget.name}" from ${deleteTarget.docs.length} restaurants? This cannot be undone.`
-            : `Permanently delete "${deleteTarget?.name}"? This cannot be undone.`
-        }
+        message={`Permanently delete "${deleteTarget?.name}"? This cannot be undone.`}
         confirmLabel="Delete"
+        variant="danger"
+      />
+
+      <ConfirmDialog
+        open={showCleanConfirm}
+        onClose={() => setShowCleanConfirm(false)}
+        onConfirm={handleCleanupDuplicates}
+        title="Remove Duplicate Add-ons"
+        message="This will permanently delete duplicate add-ons with the same name (case-insensitive). Only the first occurrence will be kept. This cannot be undone."
+        confirmLabel="Yes, Remove Duplicates"
         variant="danger"
       />
     </div>

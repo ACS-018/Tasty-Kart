@@ -61,110 +61,129 @@ class _InfoContentScreenState extends State<InfoContentScreen> {
     final r = Responsive.of(context);
     final horizontal = r.responsive(mobile: 24.0, tablet: 40.0, desktop: 48.0);
     final controller = _controller;
+    final topInset = MediaQuery.paddingOf(context).top;
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
-      backgroundColor: AppColors.white,
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: EdgeInsets.fromLTRB(horizontal, 20, horizontal, 0),
-              child: OnboardingTitleBlock(
-                title: widget.title,
-                subtitle: '',
-                showBack: true,
-              ),
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.fromLTRB(horizontal, 16, horizontal, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (controller != null) ...[
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: AspectRatio(
-                          aspectRatio: controller.value.isInitialized
-                              ? controller.value.aspectRatio
-                              : 16 / 9,
-                          child: ColoredBox(
-                            color: Colors.black,
-                            child: controller.value.isInitialized
-                                ? Stack(
-                                    alignment: Alignment.center,
-                                    children: [
-                                      VideoPlayer(controller),
-                                      IconButton(
-                                        onPressed: () {
-                                          setState(() {
-                                            controller.value.isPlaying
-                                                ? controller.pause()
-                                                : controller.play();
-                                          });
-                                        },
-                                        icon: Icon(
-                                          controller.value.isPlaying
-                                              ? Icons.pause_circle_filled
-                                              : Icons.play_circle_fill,
-                                          color: Colors.white,
-                                          size: 56,
-                                        ),
-                                      ),
-                                    ],
-                                  )
-                                : Center(
-                                    child: _videoError == null
-                                        ? const CircularProgressIndicator(
-                                            color: Colors.white,
-                                          )
-                                        : Padding(
-                                            padding: const EdgeInsets.all(16),
-                                            child: Text(
-                                              _videoError!,
-                                              textAlign: TextAlign.center,
-                                              style: const TextStyle(
+      backgroundColor: AppColors.primary,
+      body: Column(
+        children: [
+          // Status bar area fills with primary colour
+          SizedBox(height: topInset),
+          Expanded(
+            child: ColoredBox(
+              color: AppColors.white,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(horizontal, 20, horizontal, 0),
+                    child: OnboardingTitleBlock(
+                      title: widget.title,
+                      subtitle: '',
+                      showBack: true,
+                    ),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.fromLTRB(
+                        horizontal,
+                        16,
+                        horizontal,
+                        16,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (controller != null) ...[
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: AspectRatio(
+                                aspectRatio: controller.value.isInitialized
+                                    ? controller.value.aspectRatio
+                                    : 16 / 9,
+                                child: ColoredBox(
+                                  color: Colors.black,
+                                  child: controller.value.isInitialized
+                                      ? Stack(
+                                          alignment: Alignment.center,
+                                          children: [
+                                            VideoPlayer(controller),
+                                            IconButton(
+                                              onPressed: () {
+                                                setState(() {
+                                                  controller.value.isPlaying
+                                                      ? controller.pause()
+                                                      : controller.play();
+                                                });
+                                              },
+                                              icon: Icon(
+                                                controller.value.isPlaying
+                                                    ? Icons.pause_circle_filled
+                                                    : Icons.play_circle_fill,
                                                 color: Colors.white,
+                                                size: 56,
                                               ),
                                             ),
-                                          ),
-                                  ),
-                          ),
-                        ),
+                                          ],
+                                        )
+                                      : Center(
+                                          child: _videoError == null
+                                              ? const CircularProgressIndicator(
+                                                  color: Colors.white,
+                                                )
+                                              : Padding(
+                                                  padding: const EdgeInsets.all(
+                                                    16,
+                                                  ),
+                                                  child: Text(
+                                                    _videoError!,
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(
+                                                      color: Colors.white,
+                                                    ),
+                                                  ),
+                                                ),
+                                        ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
+                          if (widget.body.trim().isNotEmpty)
+                            Text(
+                              widget.body,
+                              style: TextStyle(
+                                fontSize: r.responsive(
+                                  mobile: 14.0,
+                                  tablet: 15.0,
+                                  desktop: 16.0,
+                                ),
+                                height: 1.5,
+                                color: AppColors.textDark,
+                              ),
+                            ),
+                        ],
                       ),
-                      const SizedBox(height: 16),
-                    ],
-                    if (widget.body.trim().isNotEmpty)
-                      Text(
-                        widget.body,
-                        style: TextStyle(
-                          fontSize: r.responsive(
-                            mobile: 14.0,
-                            tablet: 15.0,
-                            desktop: 16.0,
-                          ),
-                          height: 1.5,
-                          color: AppColors.textDark,
-                        ),
-                      ),
-                  ],
-                ),
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontal,
+                      12,
+                      horizontal,
+                      r.responsive(mobile: 20.0, tablet: 28.0, desktop: 32.0),
+                    ),
+                    child: AppButton(
+                      label: widget.buttonLabel,
+                      onPressed: () => Navigator.of(context).pop(true),
+                    ),
+                  ),
+                ],
               ),
             ),
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                horizontal,
-                12,
-                horizontal,
-                r.responsive(mobile: 20.0, tablet: 28.0, desktop: 32.0),
-              ),
-              child: AppButton(
-                label: widget.buttonLabel,
-                onPressed: () => Navigator.of(context).pop(true),
-              ),
-            ),
-          ],
-        ),
+          ),
+          SizedBox(height: bottomInset),
+        ],
       ),
     );
   }

@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+
+# Kiro IDE
+.kiro/
+
+# Android keystores — NEVER commit signing keys
+*.jks
+*.keystore
+**/android/key.properties
+**/android/app/key.properties
+
+# Android local SDK paths
+**/android/local.properties
+
+# Flutter/Dart build artifacts
+**/build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+
+# Node / Firebase
+node_modules/
+dist/
+.env
+.env.*
+**/functions/node_modules/
+**/functions/lib/
+
+# Firebase cache
+**/.firebase/

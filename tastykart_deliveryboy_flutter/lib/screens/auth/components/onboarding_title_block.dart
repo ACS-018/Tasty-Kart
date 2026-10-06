@@ -39,15 +39,23 @@ class OnboardingTitleBlock extends StatelessWidget {
         if (showBack)
           Align(
             alignment: Alignment.centerLeft,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: onBack ?? () => Navigator.of(context).maybePop(),
-              child: const Padding(
-                padding: EdgeInsets.only(bottom: 10, right: 12),
-                child: Icon(
-                  Icons.arrow_back,
-                  color: AppColors.textDark,
-                  size: 24,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onBack ?? () => Navigator.of(context).maybePop(),
+                borderRadius: BorderRadius.circular(24),
+                child: const Padding(
+                  padding: EdgeInsets.only(
+                    left: 4,
+                    right: 16,
+                    top: 4,
+                    bottom: 14,
+                  ),
+                  child: Icon(
+                    Icons.arrow_back,
+                    color: AppColors.textDark,
+                    size: 24,
+                  ),
                 ),
               ),
             ),

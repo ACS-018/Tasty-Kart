@@ -35,6 +35,10 @@ class DeliveryOrder {
   final String cancelReason;
   final String cancelPhase;
   final String cancelledBy;
+
+  /// Who initiated the cancellation: 'user' | 'admin' | 'delivery_partner'
+  /// Written by cancelOrderByUser() in the user app.
+  final String cancellationSource;
   final String collectedVia;
   final String deniedPartnerId;
   final bool multiPickup;
@@ -53,6 +57,12 @@ class DeliveryOrder {
   /// Tip the customer added for the delivery partner.
   /// Written by the user app into Firestore as `tip`.
   final int tip;
+
+  /// Wallet credit the customer applied at checkout.
+  /// Written by the user app into Firestore as `walletUsed`.
+  /// For COD+wallet orders: `total` = cash portion only; `walletUsed` = wallet portion.
+  /// Full order value = total + walletUsed.
+  final int walletUsed;
 
   const DeliveryOrder({
     required this.id,
@@ -86,6 +96,7 @@ class DeliveryOrder {
     this.cancelReason = '',
     this.cancelPhase = '',
     this.cancelledBy = '',
+    this.cancellationSource = '',
     this.collectedVia = '',
     this.deniedPartnerId = '',
     this.multiPickup = false,
@@ -95,6 +106,7 @@ class DeliveryOrder {
     this.excludedPartnerIds = const [],
     this.deliveryOtp = '',
     this.tip = 0,
+    this.walletUsed = 0,
   });
 
   String get statusValue => status.toLowerCase().trim();
@@ -103,6 +115,11 @@ class DeliveryOrder {
 
   bool get isCancelled =>
       statusValue == 'cancelled' || statusValue == 'refunded';
+
+  /// True when the customer cancelled the order before the partner picked it up.
+  /// The delivery boy must NOT pick up this order and is set back to online.
+  bool get isUserCancelled =>
+      isCancelled && (cancellationSource == 'user' || cancelledBy == 'user');
 
   bool get isIncoming {
     if (partnerAccepted) return false;
@@ -184,11 +201,20 @@ class DeliveryOrder {
     return sum < 0 ? 0 : sum;
   }
 
+  /// Amount the delivery partner collected in cash that belongs to TastyKart.
+  /// For pure COD: total - deliveryFee - tip
+  /// For COD+wallet: (total + walletUsed) - deliveryFee - tip
+  /// The wallet portion was paid digitally; the remaining cash is what the
+  /// partner physically collected and must remit to TastyKart.
   int get collectedMoney {
     if (!isDelivered) return 0;
     if (isOnlinePaid) return 0;
     if (collectedVia.isEmpty) return 0;
-    return total;
+    // Full order value = total (cash collected) + walletUsed (paid digitally)
+    // Partner's cut = deliveryFee + tip
+    // TastyKart's portion = full order value - partner's cut
+    final fullValue = total + walletUsed;
+    return (fullValue - deliveryFee - tip).clamp(0, fullValue);
   }
 
   int get tripMinutes {
@@ -313,6 +339,7 @@ class DeliveryOrder {
       cancelReason: d['cancelReason']?.toString() ?? '',
       cancelPhase: d['cancelPhase']?.toString() ?? '',
       cancelledBy: d['cancelledBy']?.toString() ?? '',
+      cancellationSource: d['cancellationSource']?.toString() ?? '',
       collectedVia: d['collectedVia']?.toString() ?? '',
       deniedPartnerId: d['deniedPartnerId']?.toString() ?? '',
       multiPickup: d['multiPickup'] == true || d['multiPicking'] == true,
@@ -324,6 +351,7 @@ class DeliveryOrder {
       ),
       deliveryOtp: d['deliveryOtp']?.toString() ?? '',
       tip: (d['tip'] as num? ?? 0).toInt(),
+      walletUsed: (d['walletUsed'] as num? ?? 0).toInt(),
     );
   }
 

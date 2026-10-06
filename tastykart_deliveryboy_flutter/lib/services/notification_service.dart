@@ -49,18 +49,30 @@ class NotificationService {
         });
   }
 
-  /// Watch inbox (legacy - all notifications)
-  static Stream<List<AppNotification>> watchInbox() {
-    return _db
+  /// Watch inbox for a partner.
+  ///
+  /// [registeredAt] — when provided, only notifications created on or after
+  /// this date are fetched from Firestore.  This prevents new partners from
+  /// ever downloading broadcast notifications that predate their registration.
+  static Stream<List<AppNotification>> watchInbox({DateTime? registeredAt}) {
+    var query = _db
         .collection(FirestorePaths.notifications)
-        .limit(60)
-        .snapshots()
-        .map(
-          (snap) => snap.docs
-              .map(AppNotification.fromDoc)
-              .where((n) => n.title.isNotEmpty)
-              .toList(),
-        );
+        .orderBy('createdAt', descending: true)
+        .limit(60);
+
+    if (registeredAt != null) {
+      query = query.where(
+        'createdAt',
+        isGreaterThanOrEqualTo: Timestamp.fromDate(registeredAt),
+      );
+    }
+
+    return query.snapshots().map(
+      (snap) => snap.docs
+          .map(AppNotification.fromDoc)
+          .where((n) => n.title.isNotEmpty)
+          .toList(),
+    );
   }
 
   // ============ Fetch Operations ============
@@ -236,11 +248,16 @@ class NotificationService {
   ///
   /// Pass [notificationsEnabled] = false to exclude broadcast notifications
   /// for partners who have opted out of push notifications.
+  ///
+  /// Pass [registeredAt] to exclude broadcast notifications that were created
+  /// before this partner registered — prevents new partners from seeing old
+  /// global messages that have nothing to do with them.
   static List<AppNotification> visibleForPartner({
     required String partnerId,
     required List<AppNotification> inbox,
     required List<DeliveryOrder> orders,
     bool notificationsEnabled = true,
+    DateTime? registeredAt,
   }) {
     final items = <AppNotification>[
       ...inbox.where(
@@ -248,6 +265,7 @@ class NotificationService {
           n,
           partnerId,
           notificationsEnabled: notificationsEnabled,
+          registeredAt: registeredAt,
         ),
       ),
       ...fromOrders(orders),
@@ -265,15 +283,23 @@ class NotificationService {
     AppNotification note,
     String partnerId, {
     bool notificationsEnabled = true,
+    DateTime? registeredAt,
   }) {
     // Never show support-channel notifications in the partner feed.
     if (note.type == 'support') return false;
 
     // Broadcast notifications (userId == 'broadcast' or empty) are shown to
-    // all partners — UNLESS this partner has opted out of notifications.
+    // all partners — UNLESS this partner has opted out of notifications, or
+    // the notification was created before this partner registered (so new
+    // partners don't see stale global messages from days ago).
     final uid = note.userId.trim();
     if (uid.isEmpty || uid == 'broadcast') {
-      return notificationsEnabled;
+      if (!notificationsEnabled) return false;
+      // Hide broadcasts that predate this partner's registration.
+      if (registeredAt != null && note.createdAt != null) {
+        if (note.createdAt!.isBefore(registeredAt)) return false;
+      }
+      return true;
     }
 
     // Targeted notification — only show to the addressed partner.

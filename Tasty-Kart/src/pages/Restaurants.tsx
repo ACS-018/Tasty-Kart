@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
-import { Eye, Edit, Trash2, Plus, Star, MapPin, Phone, Upload, Loader2, Store, UtensilsCrossed, Tag, Check, Gift, PlusCircle } from 'lucide-react'
+import { Eye, Edit, Trash2, Plus, Star, MapPin, Phone, Upload, Loader2, Store, UtensilsCrossed, Check, Gift, PlusCircle } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { DataTable } from '@/components/shared/DataTable'
@@ -22,6 +22,7 @@ import {
   deleteDuplicateAddons,
   addonCatalogKey,
   syncAddonsForRestaurant,
+  seedDefaultCatalogForRestaurant,
 } from '@/lib/firebaseService'
 import { GoogleMapPicker } from '@/components/shared/GoogleMapPicker'
 
@@ -75,8 +76,7 @@ export function Restaurants() {
   const [view, setView] = useState<'table' | 'grid'>('table')
   const [restaurantQuery, setRestaurantQuery] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [showCategoryModal, setShowCategoryModal] = useState(false)
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([])
+  const [actionLoading, setActionLoading] = useState(false)
   const [showAddonModal, setShowAddonModal] = useState(false)
   const [selectedAddonKeys, setSelectedAddonKeys] = useState<string[]>([])
   const [addonsList, setAddonsList] = useState<Addon[]>([])
@@ -100,6 +100,7 @@ export function Restaurants() {
     status: 'active' as 'active' | 'inactive',
     description: '',
     popular: false,
+    categoryId: '', // Added for restaurant category
   })
   const [imageFile, setImageFile] = useState<File | null>(null)
 
@@ -230,6 +231,7 @@ export function Restaurants() {
   const stats = [
     { label: 'Total Restaurants', value: restaurants.length, icon: Store, color: 'blue' as const },
     { label: 'Active', value: restaurants.filter(r => r.status === 'active').length, icon: Star, color: 'green' as const },
+    { label: 'Visible in App', value: restaurants.filter(r => r.status === 'active').length, icon: Eye, color: 'green' as const },
     { label: 'Total Revenue', value: formatCurrency(restaurants.reduce((s, r) => s + (r.revenue || 0), 0)), icon: Star, color: 'amber' as const },
   ]
 
@@ -261,6 +263,9 @@ export function Restaurants() {
   // Populate form when editing
   useEffect(() => {
     if (editTarget) {
+      const categoryId = Array.isArray(editTarget.categories) && editTarget.categories.length > 0
+        ? editTarget.categories[0]
+        : ''
       setFormData({
         name: editTarget.name,
         cuisine: editTarget.cuisine,
@@ -275,8 +280,8 @@ export function Restaurants() {
         status: editTarget.status,
         description: editTarget.description || '',
         popular: editTarget.popular === true,
+        categoryId: categoryId,
       })
-      setSelectedCategories(editTarget.categories || [])
       setSelectedLocation(editTarget.location || null)
       setImageFile(null)
       setAddonInitForRestaurantId(null)
@@ -293,23 +298,54 @@ export function Restaurants() {
     setAddonInitForRestaurantId(editTarget.id)
   }, [editTarget, addonsList, addonInitForRestaurantId])
 
+  const fixRestaurantStatuses = async () => {
+    setActionLoading(true)
+    try {
+      let fixed = 0
+      for (const restaurant of restaurants) {
+        // Fix if status is missing, undefined, or not 'active'/'inactive'
+        if (!restaurant.status || !['active', 'inactive'].includes(restaurant.status)) {
+          await updateDocumentInFirestore('restaurants', restaurant.id, {
+            status: 'active', // Default to active
+          })
+          fixed++
+        }
+      }
+      setActionLoading(false)
+      if (fixed > 0) {
+        success('Status Fixed', `Updated status for ${fixed} restaurant(s). They should now appear in the user app.`)
+      } else {
+        success('All Good', 'All restaurants already have valid status values.')
+      }
+    } catch (err: any) {
+      setActionLoading(false)
+      toastError('Fix Failed', err?.message || 'Could not update restaurant statuses')
+    }
+  }
+
   const resetRestaurantForm = () => {
     setFormData({
       name: '', cuisine: '', owner: '', phone: '', email: '',
       address: '', city: 'Bangalore', openingHours: '10:00 AM - 11:00 PM',
       deliveryTime: '30-45 min', minOrder: '200', status: 'active', description: '',
-      popular: false,
+      popular: false, categoryId: '',
     })
-    setSelectedCategories([])
     setSelectedAddonKeys([])
     setAddonInitForRestaurantId(null)
     setSelectedLocation(null)
     setImageFile(null)
+    setEditTarget(null)
   }
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.name.trim()) return
+
+    // Validate category is selected
+    if (!formData.categoryId.trim()) {
+      toastError('Category Required', 'Please select a restaurant category before saving.')
+      return
+    }
 
     // Validate location is selected
     if (!selectedLocation) {
@@ -343,7 +379,7 @@ export function Restaurants() {
         logo: logoUrl,
         isVeg: false,
         popular: formData.popular,
-        categories: selectedCategories,
+        categories: [formData.categoryId],
         location: selectedLocation,
       }
 
@@ -359,12 +395,24 @@ export function Restaurants() {
             toastError('Add-ons', addonSync.error || 'Could not assign add-ons for the user app')
           }
       }
+
+      // ── REMOVED: Automatic seeding of default categories ──────────
+      // Previously created: Starters, Main Course, Breads, Desserts, Beverages
+      // Now admin must explicitly add categories - prevents showing wrong categories
+      // if (res.success) {
+      //   await seedDefaultCatalogForRestaurant({
+      //     id: newRes.id,
+      //     name: newRes.name,
+      //     cuisine: newRes.cuisine,
+      //   })
+      // }
+
       setIsSubmitting(false)
 
       if (res.success) {
         success(
           'Restaurant Saved!',
-          `"${formData.name}" saved with ${selectedCategories.length} categories and ${selectedAddonKeys.length} add-on(s) for the user app`,
+          `"${formData.name}" saved with ${selectedAddonKeys.length} add-on(s) for the user app`,
         )
         setShowAdd(false)
         resetRestaurantForm()
@@ -380,6 +428,12 @@ export function Restaurants() {
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!editTarget || !formData.name.trim()) return
+
+    // Validate category is selected
+    if (!formData.categoryId.trim()) {
+      toastError('Category Required', 'Please select a restaurant category before updating.')
+      return
+    }
 
     // Validate location is selected
     if (!selectedLocation) {
@@ -408,7 +462,7 @@ export function Restaurants() {
         status: formData.status,
         popular: formData.popular,
         logo: logoUrl,
-        categories: selectedCategories,
+        categories: [formData.categoryId],
         location: selectedLocation,
         description: formData.description || '',
       }
@@ -425,12 +479,13 @@ export function Restaurants() {
           toastError('Add-ons', addonSync.error || 'Could not update add-ons for the user app')
         }
       }
+
       setIsSubmitting(false)
 
       if (res.success) {
         success(
           'Restaurant Updated!',
-          `"${formData.name}" updated with ${selectedCategories.length} categories and ${selectedAddonKeys.length} add-on(s) for the user app`,
+          `"${formData.name}" updated with ${selectedAddonKeys.length} add-on(s) for the user app`,
         )
         setEditTarget(null)
         resetRestaurantForm()
@@ -529,7 +584,19 @@ export function Restaurants() {
     {
       accessorKey: 'status',
       header: 'Status',
-      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+      cell: ({ row }) => (
+        <div className="flex items-center gap-2">
+          <StatusBadge status={row.original.status} />
+          {row.original.status === 'active' && (
+            <span 
+              className="text-[10px] font-bold text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-200"
+              title="Visible in user app"
+            >
+              👁️ LIVE
+            </span>
+          )}
+        </div>
+      ),
     },
     {
       id: 'offers',
@@ -596,6 +663,15 @@ export function Restaurants() {
     <div className="space-y-6 pb-8">
 
       <div className="flex items-center justify-end gap-2 flex-wrap">
+        <Button 
+          size="sm" 
+          variant="secondary" 
+          icon={<Check size={14} />} 
+          onClick={fixRestaurantStatuses}
+          disabled={actionLoading}
+        >
+          {actionLoading ? 'Fixing...' : 'Fix Statuses'}
+        </Button>
         <Button size="sm" icon={<Plus size={14} />} onClick={() => { resetRestaurantForm(); setShowAdd(true) }}>Add Restaurant</Button>
       </div>
 
@@ -779,6 +855,26 @@ export function Restaurants() {
               >
                 Manage Menu
               </Button>
+              {/* Sync food categories for restaurants that don't have any yet */}
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<PlusCircle size={14} />}
+                onClick={async () => {
+                  const result = await seedDefaultCatalogForRestaurant({
+                    id: selected.id,
+                    name: selected.name,
+                    cuisine: selected.cuisine || 'Multi-Cuisine',
+                  })
+                  if (result.success) {
+                    success('Menu Categories Added', `Default menu sections (Starters, Main Course, etc.) added to ${selected.name}`)
+                  } else {
+                    toastError('Failed', result.error || 'Could not add menu categories')
+                  }
+                }}
+              >
+                Add Menu Categories
+              </Button>
               <Button size="sm" variant="secondary" icon={<Edit size={14} />} onClick={() => { setEditTarget(selected); setSelected(null) }}>Edit Details</Button>
               <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => { setDeleteTarget(selected); setSelected(null) }}>Delete</Button>
             </div>
@@ -803,6 +899,19 @@ export function Restaurants() {
               onChange={e => setFormData({ ...formData, cuisine: e.target.value })}
               placeholder="e.g. North Indian, Chinese"
             />
+            <Select
+              label="Restaurant Category *"
+              value={formData.categoryId}
+              onChange={e => setFormData({ ...formData, categoryId: e.target.value })}
+              required
+            >
+              <option value="">Select a category</option>
+              {restaurantCategories.map(cat => (
+                <option key={cat.id} value={cat.id}>
+                  {cat.name} ({categoryRestaurantCount(cat)} restaurants)
+                </option>
+              ))}
+            </Select>
             <Input
               label="Owner Name"
               value={formData.owner}
@@ -910,38 +1019,7 @@ export function Restaurants() {
               </span>
             </label>
 
-            {/* Restaurant Categories */}
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
-                Restaurant Categories *
-              </label>
-              <button
-                type="button"
-                onClick={() => setShowCategoryModal(true)}
-                className="w-full flex items-center justify-between gap-3 p-3 rounded-xl border-2 border-gray-200 bg-white hover:border-[#B32B2C] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <Tag size={18} className="text-[#B32B2C]" />
-                  <span className="text-sm font-medium text-gray-700">
-                    {selectedCategories.length === 0
-                      ? 'Select Categories'
-                      : `${selectedCategories.length} ${selectedCategories.length === 1 ? 'Category' : 'Categories'} Selected`}
-                  </span>
-                </div>
-                <div className="text-xs text-gray-400">Click to select</div>
-              </button>
-              {selectedCategories.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {restaurantCategories
-                    .filter(cat => selectedCategories.includes(cat.id))
-                    .map(cat => (
-                      <span key={cat.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-100 text-blue-700">
-                        {cat.name}
-                      </span>
-                    ))}
-                </div>
-              )}
-            </div>
+
 
             {/* Menu add-ons (customer app customise sheet) */}
             <div className="sm:col-span-2">
@@ -1028,6 +1106,19 @@ export function Restaurants() {
               onChange={e => setFormData({ ...formData, cuisine: e.target.value })}
               placeholder="e.g. North Indian, Chinese"
             />
+            <Select
+              label="Restaurant Category *"
+              value={formData.categoryId}
+              onChange={e => setFormData({ ...formData, categoryId: e.target.value })}
+              required
+            >
+              <option value="">Select a category</option>
+              {restaurantCategories.map(cat => (
+                <option key={cat.id} value={cat.id}>
+                  {cat.name} ({categoryRestaurantCount(cat)} restaurants)
+                </option>
+              ))}
+            </Select>
             <Input
               label="Owner Name"
               value={formData.owner}
@@ -1135,38 +1226,7 @@ export function Restaurants() {
               </span>
             </label>
 
-            {/* Restaurant Categories */}
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
-                Restaurant Categories *
-              </label>
-              <button
-                type="button"
-                onClick={() => setShowCategoryModal(true)}
-                className="w-full flex items-center justify-between gap-3 p-3 rounded-xl border-2 border-gray-200 bg-white hover:border-[#B32B2C] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <Tag size={18} className="text-[#B32B2C]" />
-                  <span className="text-sm font-medium text-gray-700">
-                    {selectedCategories.length === 0
-                      ? 'Select Categories'
-                      : `${selectedCategories.length} ${selectedCategories.length === 1 ? 'Category' : 'Categories'} Selected`}
-                  </span>
-                </div>
-                <div className="text-xs text-gray-400">Click to select</div>
-              </button>
-              {selectedCategories.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {restaurantCategories
-                    .filter(cat => selectedCategories.includes(cat.id))
-                    .map(cat => (
-                      <span key={cat.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-100 text-blue-700">
-                        {cat.name}
-                      </span>
-                    ))}
-                </div>
-              )}
-            </div>
+
 
             {/* Menu add-ons (customer app customise sheet) */}
             <div className="sm:col-span-2">
@@ -1331,99 +1391,6 @@ export function Restaurants() {
                 Clear All
               </Button>
               <Button variant="primary" size="sm" onClick={() => setShowAddonModal(false)}>
-                Done
-              </Button>
-            </div>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Category Selection Modal */}
-      <Modal
-        open={showCategoryModal}
-        onClose={() => setShowCategoryModal(false)}
-        title="Select Restaurant Categories"
-        size="md"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-gray-600">
-            Select the categories that best describe this restaurant. Users will be able to discover this restaurant by browsing these categories in the app.
-          </p>
-          
-          {restaurantCategories.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-sm text-gray-400">No restaurant categories available.</p>
-              <p className="text-xs text-gray-400 mt-1">Add categories in Restaurant Categories page first.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-2 max-h-96 overflow-y-auto">
-              {restaurantCategories.map((category) => {
-                const isSelected = selectedCategories.includes(category.id)
-                return (
-                  <button
-                    key={category.id}
-                    type="button"
-                    onClick={() => {
-                      if (isSelected) {
-                        setSelectedCategories(prev => prev.filter(id => id !== category.id))
-                      } else {
-                        setSelectedCategories(prev => [...prev, category.id])
-                      }
-                    }}
-                    className={`flex items-center gap-3 p-3 rounded-xl border-2 transition-all ${
-                      isSelected
-                        ? 'border-[#B32B2C] bg-red-50'
-                        : 'border-gray-200 bg-white hover:border-gray-300'
-                    }`}
-                  >
-                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
-                      isSelected
-                        ? 'border-[#B32B2C] bg-[#B32B2C]'
-                        : 'border-gray-300'
-                    }`}>
-                      {isSelected && <Check size={14} className="text-white" />}
-                    </div>
-                    
-                    {category.icon && (
-                      <span className="text-2xl">{category.icon}</span>
-                    )}
-                    
-                    <div className="flex-1 text-left">
-                      <p className={`text-sm font-semibold ${isSelected ? 'text-[#B32B2C]' : 'text-gray-900'}`}>
-                        {category.name}
-                      </p>
-                      {category.description && (
-                        <p className="text-xs text-gray-500 mt-0.5">{category.description}</p>
-                      )}
-                    </div>
-                    
-                    <span className="text-xs text-gray-400">
-                      {categoryRestaurantCount(category)} restaurants
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-
-          <div className="flex items-center justify-between pt-4 border-t border-gray-200">
-            <span className="text-sm text-gray-600">
-              {selectedCategories.length} {selectedCategories.length === 1 ? 'category' : 'categories'} selected
-            </span>
-            <div className="flex gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setSelectedCategories([])}
-                disabled={selectedCategories.length === 0}
-              >
-                Clear All
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => setShowCategoryModal(false)}
-              >
                 Done
               </Button>
             </div>

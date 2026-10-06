@@ -71,7 +71,7 @@ export function RestaurantMenu() {
   const initialTab = (new URLSearchParams(location.search).get('tab') as Tab | null) ?? 'categories'
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
-  const [categories, setCategories] = useState<FoodCategory[]>([])
+  const [categories, setCategories] = useState<FoodCategory[]>([])  // Start empty - only refilter effect sets this
   const [items, setItems] = useState<FoodItem[]>([])
   const [addons, setAddons] = useState<Addon[]>([])
   const [allOffers, setAllOffers] = useState<Offer[]>([])
@@ -79,6 +79,18 @@ export function RestaurantMenu() {
   const [tab, setTab] = useState<Tab>(initialTab)
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // ── Add-category modal: mode toggle ────────────────────────────────────────
+  // 'new'      → create a brand-new category for this restaurant
+  // 'existing' → pick from globally existing foodCategories (any restaurant)
+  const [catModalMode, setCatModalMode] = useState<'new' | 'existing'>('new')
+  // All categories across ALL restaurants — populated for the "existing" picker
+  const [allCategories, setAllCategories] = useState<FoodCategory[]>([])
+
+  // ── Add-on catalog selection ───────────────────────────────────────────────
+  // All catalog add-ons (global add-ons without restaurantId)
+  const [catalogAddons, setCatalogAddons] = useState<Addon[]>([])
+  const [selectedCatalogAddonIds, setSelectedCatalogAddonIds] = useState<string[]>([])
 
   // Modals
   const [showCatModal, setShowCatModal] = useState(false)
@@ -99,7 +111,7 @@ export function RestaurantMenu() {
   const [editAddon, setEditAddon] = useState<Addon | null>(null)
   const [deleteAddon, setDeleteAddon] = useState<Addon | null>(null)
   const [addonForm, setAddonForm] = useState({
-    name: '', price: '30', category: 'General', status: 'active' as 'active' | 'inactive', description: '',
+    name: '', price: '30', category: 'Extras', status: 'active' as 'active' | 'inactive', description: '',
   })
 
   // Offer modals
@@ -118,30 +130,81 @@ export function RestaurantMenu() {
     if (!id) return
     const unsubs = [
       subscribeToCollection<Restaurant>('restaurants', (list) => {
-        const found = list.find(r => r.id === id) || null
+        // Match by doc path id OR body id field (legacy docs)
+        const found = list.find(r => r.id === id || (r as any)._bodyId === id) || null
         setRestaurant(found)
         setLoading(false)
       }),
       subscribeToCollection<FoodCategory>('foodCategories', (list) => {
-        const mine = list
-          .filter(c => c.restaurantId === id)
-          .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-        setCategories(mine)
-        setSelectedCategoryId(prev => {
-          if (prev && mine.some(c => c.id === prev)) return prev
-          return mine[0]?.id ?? null
-        })
+        setAllCategories(list)
+        setAllRawCategories(list)
       }),
       subscribeToCollection<FoodItem>('foodItems', (list) => {
+        setAllRawItems(list)
         setItems(list.filter(i => i.restaurantId === id))
       }),
       subscribeToCollection<Addon>('addons', (list) => {
         setAddons(list.filter(a => a.restaurantId === id))
+        // Catalog add-ons are those without restaurantId (global add-ons)
+        setCatalogAddons(list.filter(a => !a.restaurantId).sort((a, b) => a.name.localeCompare(b.name)))
       }),
       subscribeToCollection<Offer>('offers', setAllOffers),
     ]
     return () => unsubs.forEach(fn => fn())
   }, [id])
+
+  // Re-filter categories and items when restaurant doc loads,
+  // because if the doc path ID (d.id) differs from the body 'id' field
+  // (legacy docs), the subscription may have already fired with the
+  // allCategories/allItems list before restaurant was resolved.
+  // This effect ensures the filter is re-applied with restaurant.id.
+  const [allRawCategories, setAllRawCategories] = useState<FoodCategory[]>([])
+  const [allRawItems, setAllRawItems] = useState<FoodItem[]>([])
+
+  // Immediate filter effect - runs as soon as allRawCategories updates
+  useEffect(() => {
+    if (allRawCategories.length === 0) {
+      setCategories([])
+      return
+    }
+    
+    // If restaurant hasn't loaded yet, filter by URL id only (best effort)
+    if (!restaurant) {
+      const mine = allRawCategories
+        .filter(c => c.restaurantId === id)
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+      setCategories(mine)
+      return
+    }
+
+    // Restaurant loaded - use comprehensive ID matching
+    const restaurantIds = new Set([
+      id,
+      restaurant.id,
+      (restaurant as any)._bodyId,
+    ].filter(Boolean))
+    const mine = allRawCategories
+      .filter(c => restaurantIds.has(c.restaurantId))
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+    
+    setCategories(mine)
+    
+    setSelectedCategoryId(prev => {
+      if (prev && mine.some(c => c.id === prev)) return prev
+      if (mine.length === 0) return prev
+      return mine[0]?.id ?? null
+    })
+  }, [restaurant, allRawCategories, id])
+
+  useEffect(() => {
+    if (!restaurant || allRawItems.length === 0) return
+    const restaurantIds = new Set([
+      id,
+      restaurant.id,
+      (restaurant as any)._bodyId,
+    ].filter(Boolean))
+    setItems(allRawItems.filter(i => restaurantIds.has(i.restaurantId)))
+  }, [restaurant, allRawItems, id])
 
   const offers = useMemo(() => {
     if (!restaurant) return []
@@ -192,6 +255,7 @@ export function RestaurantMenu() {
   const openAddCat = () => {
     setEditCat(null)
     setCatForm({ name: '', icon: '🥗', description: '', status: 'active' })
+    setCatModalMode('new')
     setShowCatModal(true)
   }
 
@@ -203,12 +267,64 @@ export function RestaurantMenu() {
       description: cat.description || '',
       status: cat.status,
     })
+    setCatModalMode('new')
     setShowCatModal(true)
   }
 
+  // Auto-select first category when switching to the items tab
+  // (handles the case where tab is set before subscription fires)
+  useEffect(() => {
+    if (tab === 'items' && !selectedCategoryId && categories.length > 0) {
+      setSelectedCategoryId(categories[0].id)
+    }
+  }, [tab, selectedCategoryId, categories])
+  const [selectedExistingCatId, setSelectedExistingCatId] = useState<string>('')
+
   const saveCategory = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!restaurant || !catForm.name.trim()) return
+    if (!restaurant) return
+
+    // ── 'existing' mode: clone a category from another restaurant ─────────
+    if (catModalMode === 'existing' && !editCat) {
+      const source = allCategories.find(c => c.id === selectedExistingCatId)
+      if (!source) { toastError('Select a category', 'Please choose a category to add'); return }
+      // Check if this restaurant already has a category with the same name
+      const alreadyExists = categories.some(
+        c => c.name.toLowerCase() === source.name.toLowerCase()
+      )
+      if (alreadyExists) {
+        toastError('Already exists', `"${source.name}" is already in this restaurant's menu`)
+        return
+      }
+      setIsSubmitting(true)
+      try {
+        const payload = {
+          id: `cat_${restaurant.id}_${source.name.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}`,
+          restaurantId: restaurant.id,
+          restaurantName: restaurant.name,
+          name: source.name,
+          icon: source.icon || '🥗',
+          description: source.description || '',
+          sortOrder: categories.length,
+          itemCount: 0,
+          status: 'active' as const,
+        }
+        const res = await addDocumentToFirestore('foodCategories', payload)
+        if (res.success) {
+          success('Category Added', `"${payload.name}" added to ${restaurant.name}`)
+          setShowCatModal(false)
+          setSelectedExistingCatId('')
+        } else toastError('Save Failed', 'Could not add category')
+      } catch (err: any) {
+        toastError('Error', err?.message || 'Failed to save')
+      } finally {
+        setIsSubmitting(false)
+      }
+      return
+    }
+
+    // ── 'new' mode: create or edit ────────────────────────────────────────
+    if (!catForm.name.trim()) return
     setIsSubmitting(true)
     try {
       const payload = {
@@ -363,7 +479,8 @@ export function RestaurantMenu() {
   // ─── Addons CRUD ───────────────────────────────────────────────────────────
   const openAddAddon = () => {
     setEditAddon(null)
-    setAddonForm({ name: '', price: '30', category: 'General', status: 'active', description: '' })
+    setSelectedCatalogAddonIds([])
+    setAddonForm({ name: '', price: '30', category: 'Extras', status: 'active', description: '' })
     setShowAddonModal(true)
   }
 
@@ -372,7 +489,7 @@ export function RestaurantMenu() {
     setAddonForm({
       name: addon.name,
       price: String(addon.price),
-      category: addon.category || 'General',
+      category: addon.category || 'Extras',
       status: addon.status,
       description: addon.description || '',
     })
@@ -381,27 +498,72 @@ export function RestaurantMenu() {
 
   const saveAddon = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!restaurant || !addonForm.name.trim()) return
+    if (!restaurant) return
+
     setIsSubmitting(true)
     try {
-      const payload = {
-        id: editAddon?.id || `add_${restaurant.id}_${Date.now()}`,
-        restaurantId: restaurant.id,
-        restaurantName: restaurant.name,
-        foodItemId: editAddon?.foodItemId ?? null,
-        name: addonForm.name.trim(),
-        price: Number(addonForm.price) || 0,
-        category: addonForm.category,
-        status: addonForm.status,
-        description: addonForm.description,
+      // Edit mode - update existing add-on
+      if (editAddon) {
+        if (!addonForm.name.trim()) {
+          toastError('Validation', 'Add-on name is required')
+          setIsSubmitting(false)
+          return
+        }
+
+        const payload = {
+          id: editAddon.id,
+          restaurantId: restaurant.id,
+          restaurantName: restaurant.name,
+          foodItemId: editAddon.foodItemId ?? null,
+          name: addonForm.name.trim(),
+          price: Number(addonForm.price) || 0,
+          category: addonForm.category,
+          status: addonForm.status,
+          description: addonForm.description,
+        }
+        const res = await updateDocumentInFirestore('addons', editAddon.id, payload)
+        if (res.success) {
+          success('Add-on Updated', `"${payload.name}" saved`)
+          setShowAddonModal(false)
+        } else {
+          toastError('Save Failed', 'Could not save add-on')
+        }
       }
-      const res = editAddon
-        ? await updateDocumentInFirestore('addons', editAddon.id, payload)
-        : await addDocumentToFirestore('addons', payload)
-      if (res.success) {
-        success(editAddon ? 'Add-on Updated' : 'Add-on Added', `"${payload.name}" saved`)
-        setShowAddonModal(false)
-      } else toastError('Save Failed', 'Could not save add-on')
+      // Add mode - copy selected catalog add-ons to this restaurant
+      else {
+        if (selectedCatalogAddonIds.length === 0) {
+          toastError('Validation', 'Please select at least one add-on')
+          setIsSubmitting(false)
+          return
+        }
+
+        const selectedAddons = catalogAddons.filter(a => selectedCatalogAddonIds.includes(a.id))
+        const results = await Promise.all(
+          selectedAddons.map(async (catalogAddon) => {
+            const payload = {
+              id: `add_${restaurant.id}_${catalogAddon.name.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}`,
+              restaurantId: restaurant.id,
+              restaurantName: restaurant.name,
+              foodItemId: null,
+              name: catalogAddon.name,
+              price: catalogAddon.price,
+              category: catalogAddon.category,
+              status: 'active' as const,
+              description: catalogAddon.description || '',
+            }
+            return addDocumentToFirestore('addons', payload)
+          })
+        )
+
+        const failed = results.filter(r => !r.success)
+        if (failed.length === 0) {
+          success('Add-ons Added', `${selectedAddons.length} add-on(s) added to "${restaurant.name}"`)
+          setShowAddonModal(false)
+          setSelectedCatalogAddonIds([])
+        } else {
+          toastError('Some Failed', `${failed.length} add-on(s) could not be added`)
+        }
+      }
     } catch (err: any) {
       toastError('Error', err?.message || 'Failed to save')
     } finally {
@@ -816,7 +978,7 @@ export function RestaurantMenu() {
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="font-semibold text-gray-900">{addon.name}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{addon.category || 'General'}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{formatCurrency(addon.price)}</p>
                   </div>
                   <StatusBadge status={addon.status} />
                 </div>
@@ -1174,13 +1336,88 @@ export function RestaurantMenu() {
       {/* Category Modal */}
       <Modal open={showCatModal} onClose={() => setShowCatModal(false)} title={editCat ? 'Edit Category' : 'Add Category'} size="sm">
         <form onSubmit={saveCategory} className="space-y-4">
-          <Input label="Name *" value={catForm.name} onChange={e => setCatForm({ ...catForm, name: e.target.value })} placeholder="e.g. Starters" required />
-          <Input label="Icon" value={catForm.icon} onChange={e => setCatForm({ ...catForm, icon: e.target.value })} placeholder="🥗" />
-          <Textarea label="Description" value={catForm.description} onChange={e => setCatForm({ ...catForm, description: e.target.value })} rows={2} />
-          <Select label="Status" value={catForm.status} onChange={e => setCatForm({ ...catForm, status: e.target.value as 'active' | 'inactive' })}>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </Select>
+
+          {/* Mode toggle — only shown when adding (not editing) */}
+          {!editCat && (
+            <div className="flex gap-2 p-1 bg-gray-100 rounded-xl">
+              <button
+                type="button"
+                onClick={() => { setCatModalMode('new'); setSelectedExistingCatId('') }}
+                className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${
+                  catModalMode === 'new'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Create New
+              </button>
+              <button
+                type="button"
+                onClick={() => setCatModalMode('existing')}
+                className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${
+                  catModalMode === 'existing'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Use Existing
+              </button>
+            </div>
+          )}
+
+          {/* ── Existing category picker ── */}
+          {catModalMode === 'existing' && !editCat ? (
+            <div className="space-y-3">
+              <p className="text-xs text-gray-500">
+                Pick a category that already exists in any restaurant. It will be added to <strong>{restaurant?.name}</strong>.
+              </p>
+              <Select
+                label="Select Existing Category *"
+                value={selectedExistingCatId}
+                onChange={e => setSelectedExistingCatId(e.target.value)}
+                required
+              >
+                <option value="">— choose a category —</option>
+                {/* Group by unique name, deduplicate, exclude already-in-this-restaurant */}
+                {Array.from(
+                  new Map(
+                    allCategories
+                      .filter(c => !categories.some(mine => mine.name.toLowerCase() === c.name.toLowerCase()))
+                      .map(c => [c.name.toLowerCase(), c])
+                  ).values()
+                )
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.icon ? `${c.icon} ` : ''}{c.name}
+                    </option>
+                  ))
+                }
+              </Select>
+              {selectedExistingCatId && (() => {
+                const src = allCategories.find(c => c.id === selectedExistingCatId)
+                return src ? (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-xl border border-blue-100 text-xs text-blue-700">
+                    <span className="text-base">{src.icon || '🍽️'}</span>
+                    <span className="font-semibold">{src.name}</span>
+                    {src.description && <span className="text-blue-500">· {src.description}</span>}
+                  </div>
+                ) : null
+              })()}
+            </div>
+          ) : (
+            /* ── New / Edit category form ── */
+            <>
+              <Input label="Name *" value={catForm.name} onChange={e => setCatForm({ ...catForm, name: e.target.value })} placeholder="e.g. Starters" required />
+              <Input label="Icon" value={catForm.icon} onChange={e => setCatForm({ ...catForm, icon: e.target.value })} placeholder="🥗" />
+              <Textarea label="Description" value={catForm.description} onChange={e => setCatForm({ ...catForm, description: e.target.value })} rows={2} />
+              <Select label="Status" value={catForm.status} onChange={e => setCatForm({ ...catForm, status: e.target.value as 'active' | 'inactive' })}>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </Select>
+            </>
+          )}
+
           <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
             <Button type="button" variant="secondary" onClick={() => setShowCatModal(false)}>Cancel</Button>
             <Button type="submit" disabled={isSubmitting}>
@@ -1230,16 +1467,75 @@ export function RestaurantMenu() {
       </Modal>
 
       {/* Addon Modal */}
-      <Modal open={showAddonModal} onClose={() => setShowAddonModal(false)} title={editAddon ? 'Edit Add-on' : 'Add Add-on'} size="sm">
+      <Modal open={showAddonModal} onClose={() => setShowAddonModal(false)} title={editAddon ? 'Edit Add-on' : 'Add Add-on'} size="md">
         <form onSubmit={saveAddon} className="space-y-4">
-          <Input label="Name *" value={addonForm.name} onChange={e => setAddonForm({ ...addonForm, name: e.target.value })} required />
-          <Input label="Price (₹) *" type="number" value={addonForm.price} onChange={e => setAddonForm({ ...addonForm, price: e.target.value })} required />
-          <Input label="Group" value={addonForm.category} onChange={e => setAddonForm({ ...addonForm, category: e.target.value })} placeholder="Sauces, Sides…" />
-          <Textarea label="Description" value={addonForm.description} onChange={e => setAddonForm({ ...addonForm, description: e.target.value })} rows={2} />
-          <Select label="Status" value={addonForm.status} onChange={e => setAddonForm({ ...addonForm, status: e.target.value as 'active' | 'inactive' })}>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </Select>
+          {editAddon ? (
+            <>
+              <Input label="Name *" value={addonForm.name} onChange={e => setAddonForm({ ...addonForm, name: e.target.value })} required />
+              <Input label="Price (₹) *" type="number" value={addonForm.price} onChange={e => setAddonForm({ ...addonForm, price: e.target.value })} required />
+              <Input label="Group" value={addonForm.category} onChange={e => setAddonForm({ ...addonForm, category: e.target.value })} placeholder="Sauces, Sides…" />
+              <Textarea label="Description" value={addonForm.description} onChange={e => setAddonForm({ ...addonForm, description: e.target.value })} rows={2} />
+              <Select label="Status" value={addonForm.status} onChange={e => setAddonForm({ ...addonForm, status: e.target.value as 'active' | 'inactive' })}>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </Select>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-gray-600">Select add-ons from the global catalog to add to this restaurant:</p>
+              {catalogAddons.length === 0 ? (
+                <div className="text-center py-8 text-gray-500 border border-dashed border-gray-200 rounded-xl">
+                  <p className="text-sm">No catalog add-ons available.</p>
+                  <p className="text-xs mt-1">Create add-ons in the <Link to="/addons" className="text-[#B32B2C] hover:underline">Add-ons</Link> page first.</p>
+                </div>
+              ) : (
+                <div className="max-h-96 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50">
+                  {catalogAddons.map(addon => {
+                    const isSelected = selectedCatalogAddonIds.includes(addon.id)
+                    const alreadyExists = addons.some(a => a.name.toLowerCase() === addon.name.toLowerCase())
+                    return (
+                      <label
+                        key={addon.id}
+                        className={cn(
+                          'flex items-center gap-3 px-4 py-3 border-b border-gray-100 last:border-0',
+                          alreadyExists ? 'opacity-50 cursor-not-allowed bg-gray-100' : 'cursor-pointer hover:bg-white'
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          disabled={alreadyExists}
+                          onChange={() => {
+                            if (alreadyExists) return
+                            setSelectedCatalogAddonIds(prev =>
+                              prev.includes(addon.id)
+                                ? prev.filter(id => id !== addon.id)
+                                : [...prev, addon.id]
+                            )
+                          }}
+                          className="accent-[#B32B2C]"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-900">{addon.name}</p>
+                          <p className="text-xs text-gray-500">
+                            {formatCurrency(addon.price)}
+                            {alreadyExists && <span className="ml-2 text-amber-600">(Already added)</span>}
+                          </p>
+                          {addon.description && <p className="text-xs text-gray-500 mt-0.5">{addon.description}</p>}
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+              {selectedCatalogAddonIds.length > 0 && (
+                <p className="text-sm font-medium text-gray-700">
+                  {selectedCatalogAddonIds.length} add-on{selectedCatalogAddonIds.length === 1 ? '' : 's'} selected
+                </p>
+              )}
+            </>
+          )}
+
           <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
             <Button type="button" variant="secondary" onClick={() => setShowAddonModal(false)}>Cancel</Button>
             <Button type="submit" disabled={isSubmitting}>

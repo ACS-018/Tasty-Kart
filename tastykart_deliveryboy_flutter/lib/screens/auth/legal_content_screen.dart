@@ -25,48 +25,44 @@ class LegalContentScreen extends StatefulWidget {
 
 class _LegalContentScreenState extends State<LegalContentScreen> {
   bool _isLoading = false;
+  bool _leaving = false;
 
-  /// Back — remove this page from legalAccepted so AuthGate steps back to
-  /// the previous screen in the legal flow (or to OnlineTraining for agreement).
   Future<void> _onBack() async {
+    if (_isLoading || _leaving) return;
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
       return;
     }
     final user = AuthService.currentUser;
     if (user == null) return;
-    setState(() => _isLoading = true);
+
+    setState(() => _leaving = true);
     try {
       final partnerId = await DeliveryPartnerService.docIdFor(user);
-      // Removing this page's ID from legalAccepted causes AuthGate to
-      // re-evaluate and show the previous step.
-      // For privacy (isLastPage): also reset termsAccepted so the T&C page
-      // re-appears rather than skipping directly back to agreement.
-      await DeliveryPartnerService.clearLegalPage(
+      await DeliveryPartnerService.stepBackFromLegalPage(
         partnerId: partnerId,
         pageId: widget.page.id,
-        resetTerms: widget.isLastPage,
       );
     } catch (_) {
       if (!mounted) return;
       AppFeedback.showError(context, 'Could not go back. Try again.');
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _leaving = false);
     }
   }
 
   Future<void> _onNext() async {
+    if (_leaving) return;
     final user = AuthService.currentUser;
     if (user == null) {
       AppFeedback.showError(context, 'Please sign in again');
       return;
     }
-    // Only the button shows a spinner — no full-screen overlay needed for a
-    // quick Firestore write (same pattern as upload_documents_screen).
     setState(() => _isLoading = true);
     try {
+      final partnerId = await DeliveryPartnerService.docIdFor(user);
       await DeliveryPartnerService.acceptLegalPage(
-        partnerId: user.uid,
+        partnerId: partnerId,
         pageId: widget.page.id,
         completeTerms: widget.isLastPage,
       );
@@ -83,11 +79,10 @@ class _LegalContentScreenState extends State<LegalContentScreen> {
     final r = Responsive.of(context);
     final page = widget.page;
 
-    // No LoadingOverlay wrapper — the AppButton spinner inside OnboardingScaffold
-    // is sufficient for this short write. Using both caused the duplicate spinner.
     return OnboardingScaffold(
       buttonLabel: 'Next',
-      isLoading: _isLoading,
+      isLoading: _isLoading || _leaving,
+      buttonEnabled: !_leaving,
       onPressed: _onNext,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

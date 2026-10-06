@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../constants/color_constants.dart';
 import '../../models/delivery_order.dart';
 import '../../models/delivery_partner.dart';
+import '../../services/audio_service.dart';
 import '../../services/delivery_partner_service.dart';
 import '../../services/order_service.dart';
 import '../../utils/app_feedback.dart';
@@ -29,9 +30,14 @@ class _NewOrderScreenState extends State<NewOrderScreen> {
   @override
   void initState() {
     super.initState();
+
+    // Start playing the buzzer when new order appears
+    _startBuzzer();
+
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_left <= 1) {
         timer.cancel();
+        _stopBuzzer();
         _reject(auto: true);
       } else {
         setState(() => _left--);
@@ -42,13 +48,33 @@ class _NewOrderScreenState extends State<NewOrderScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _stopBuzzer();
     super.dispose();
+  }
+
+  /// Start playing the buzzer in loop
+  Future<void> _startBuzzer() async {
+    try {
+      await AudioService.playNewOrderBuzzer();
+    } catch (e) {
+      debugPrint('Failed to start buzzer: $e');
+    }
+  }
+
+  /// Stop the buzzer
+  Future<void> _stopBuzzer() async {
+    try {
+      await AudioService.stopBuzzer();
+    } catch (e) {
+      debugPrint('Failed to stop buzzer: $e');
+    }
   }
 
   Future<void> _accept() async {
     if (_busy) return;
     setState(() => _busy = true);
     _timer?.cancel();
+    _stopBuzzer(); // Stop buzzer when order is accepted
     bool orderWritten = false;
     try {
       // 1. Mark partner BUSY *first*. If the assignment write later fails, we
@@ -74,8 +100,9 @@ class _NewOrderScreenState extends State<NewOrderScreen> {
       // write failed, clear BUSY immediately so the partner isn't locked
       // out of future assignments until their next offline→online toggle.
       if (!orderWritten) {
-        DeliveryPartnerService.reconcileStuckBusy(widget.partner.id)
-            .catchError((_) => false);
+        DeliveryPartnerService.reconcileStuckBusy(
+          widget.partner.id,
+        ).catchError((_) => false);
       }
       if (mounted) {
         AppFeedback.showError(context, 'Could not accept this order');
@@ -89,6 +116,7 @@ class _NewOrderScreenState extends State<NewOrderScreen> {
     if (_busy) return;
     setState(() => _busy = true);
     _timer?.cancel();
+    _stopBuzzer(); // Stop buzzer when order is rejected
     try {
       await OrderService.reject(
         order: widget.order,
@@ -100,9 +128,7 @@ class _NewOrderScreenState extends State<NewOrderScreen> {
       // on the partner doc so the admin auto-assigner can pick this partner
       // for a subsequent order without the user having to toggle offline.
       await DeliveryPartnerService.reconcileStuckBusy(widget.partner.id);
-      await DeliveryPartnerService.setAvailable(
-        partnerId: widget.partner.id,
-      );
+      await DeliveryPartnerService.setAvailable(partnerId: widget.partner.id);
 
       if (mounted && !auto) {
         AppFeedback.showSnackBar(context, message: 'Order rejected');
@@ -110,8 +136,9 @@ class _NewOrderScreenState extends State<NewOrderScreen> {
     } catch (_) {
       // Even if the OrderService.reject call failed (network / permission),
       // best-effort clear the partner status so they don't get stuck on screen.
-      DeliveryPartnerService.reconcileStuckBusy(widget.partner.id)
-          .catchError((_) => false);
+      DeliveryPartnerService.reconcileStuckBusy(
+        widget.partner.id,
+      ).catchError((_) => false);
       if (mounted) {
         AppFeedback.showError(context, 'Could not reject this order');
       }
@@ -145,7 +172,10 @@ class _NewOrderScreenState extends State<NewOrderScreen> {
                   children: [
                     IconButton(
                       onPressed: _busy ? null : () => _reject(),
-                      icon: const Icon(Icons.arrow_back, color: AppColors.white),
+                      icon: const Icon(
+                        Icons.arrow_back,
+                        color: AppColors.white,
+                      ),
                     ),
                     const Text(
                       'New Order',
@@ -327,7 +357,6 @@ class _NewOrderScreenState extends State<NewOrderScreen> {
     );
   }
 }
-
 
 class _Stop extends StatelessWidget {
   const _Stop({

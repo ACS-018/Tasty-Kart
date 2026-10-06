@@ -1,4 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/support_ticket.dart';
 import 'firestore_paths.dart';
@@ -51,11 +53,35 @@ class SupportTicketService {
     required String category,
     required String subject,
     required String firstMessage,
+    // Optional order linking
+    String? orderId,
+    String? orderNumber,
+    String? orderRestaurantName,
+    String? orderStatus,
+    int? orderTotal,
   }) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      throw StateError('Sign in required to submit a support request');
+    }
+    // Firestore security rules require partnerId == authenticated uid.
+    if (partnerId != uid) {
+      debugPrint(
+        '[SupportTicket] partnerId ($partnerId) != auth uid ($uid); using uid',
+      );
+    }
+    final authPartnerId = uid;
+
     final now = FieldValue.serverTimestamp();
     final ref = _col.doc();
-    await ref.set({
-      'partnerId': partnerId,
+    final trimmed = firstMessage.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('Message cannot be empty');
+    }
+
+    final batch = _db.batch();
+    batch.set(ref, {
+      'partnerId': authPartnerId,
       'partnerName': partnerName.isEmpty ? 'Partner' : partnerName,
       'partnerPhone': partnerPhone,
       'category': category,
@@ -65,17 +91,24 @@ class SupportTicketService {
       'unreadByAdmin': true,
       'unreadByPartner': false,
       'partnerViewing': false,
-      'lastMessage': firstMessage.trim(),
+      'lastMessage': trimmed,
       'lastSenderType': 'partner',
       'createdAt': now,
       'updatedAt': now,
+      if (orderId != null) 'orderId': orderId,
+      if (orderNumber != null) 'orderNumber': orderNumber,
+      if (orderRestaurantName != null)
+        'orderRestaurantName': orderRestaurantName,
+      if (orderStatus != null) 'orderStatus': orderStatus,
+      if (orderTotal != null) 'orderTotal': orderTotal,
     });
-    await ref.collection('messages').add({
-      'senderId': partnerId,
+    batch.set(ref.collection('messages').doc(), {
+      'senderId': authPartnerId,
       'senderType': 'partner',
-      'message': firstMessage.trim(),
+      'message': trimmed,
       'sentAt': now,
     });
+    await batch.commit();
     return ref.id;
   }
 
@@ -85,17 +118,24 @@ class SupportTicketService {
     required String partnerId,
     required String message,
   }) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      throw StateError('Sign in required to send a message');
+    }
+    final trimmed = message.trim();
+    if (trimmed.isEmpty) return;
+
     final now = FieldValue.serverTimestamp();
     await _col.doc(ticketId).collection('messages').add({
-      'senderId': partnerId,
+      'senderId': uid,
       'senderType': 'partner',
-      'message': message.trim(),
+      'message': trimmed,
       'sentAt': now,
     });
     await _col.doc(ticketId).update({
       'updatedAt': now,
       'unreadByAdmin': true,
-      'lastMessage': message.trim(),
+      'lastMessage': trimmed,
       'lastSenderType': 'partner',
     });
   }

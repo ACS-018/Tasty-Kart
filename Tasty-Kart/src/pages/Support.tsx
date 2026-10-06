@@ -6,8 +6,8 @@ import {
 import { db } from '@/lib/firebase'
 import { useAuth } from '@/context/AuthContext'
 import { useToast } from '@/components/ui/Toast'
-import { Loader2, MessageSquare, X, Send, CheckCircle, Clock, AlertCircle } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { Loader2, MessageSquare, X, Send, CheckCircle, Clock, AlertCircle, Receipt, ExternalLink } from 'lucide-react'
+import { cn, formatCurrency } from '@/lib/utils'
 
 type TicketStatus = 'open' | 'in_progress' | 'closed'
 
@@ -22,6 +22,12 @@ type Ticket = {
   unreadByAdmin: boolean
   createdAt: Timestamp | null
   updatedAt: Timestamp | null
+  // Order linking (optional — present on order-category tickets)
+  orderId?: string
+  orderNumber?: string
+  orderRestaurantName?: string
+  orderStatus?: string
+  orderTotal?: number
 }
 
 type Message = {
@@ -327,6 +333,11 @@ export function Support() {
             </div>
           </div>
 
+          {/* Order details card — shown when ticket is linked to an order */}
+          {selected.orderId && (
+            <OrderDetailsCard ticket={selected} />
+          )}
+
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {messages.map(msg => {
@@ -386,6 +397,86 @@ export function Support() {
           <p className="font-medium">Select a ticket to view the conversation</p>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Order Details Card ────────────────────────────────────────────────────────
+
+function OrderDetailsCard({ ticket }: { ticket: Ticket }) {
+  const statusColors: Record<string, { bg: string; text: string }> = {
+    delivered:  { bg: 'bg-green-100',  text: 'text-green-700'  },
+    cancelled:  { bg: 'bg-red-100',    text: 'text-red-700'    },
+    refunded:   { bg: 'bg-red-100',    text: 'text-red-700'    },
+    picked:     { bg: 'bg-purple-100', text: 'text-purple-700' },
+    preparing:  { bg: 'bg-blue-100',   text: 'text-blue-700'   },
+    accepted:   { bg: 'bg-blue-100',   text: 'text-blue-700'   },
+    pending:    { bg: 'bg-amber-100',  text: 'text-amber-700'  },
+  }
+  const statusKey = (ticket.orderStatus ?? '').toLowerCase()
+  const statusStyle = statusColors[statusKey] ?? { bg: 'bg-gray-100', text: 'text-gray-600' }
+  const statusLabel = statusKey
+    ? statusKey.charAt(0).toUpperCase() + statusKey.slice(1)
+    : 'Unknown'
+  const orderNum = ticket.orderNumber
+    ? (ticket.orderNumber.startsWith('#') ? ticket.orderNumber : `#${ticket.orderNumber}`)
+    : ticket.orderId ?? '—'
+
+  return (
+    <div className="bg-amber-50 border-b border-amber-200 px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+          <Receipt size={15} className="text-amber-700" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold text-amber-700 uppercase tracking-wider mb-1.5">
+            Linked Order
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1.5">
+            {/* Order number */}
+            <div>
+              <p className="text-[10px] text-gray-500 uppercase tracking-wide">Order</p>
+              <p className="text-sm font-bold text-gray-900">{orderNum}</p>
+            </div>
+            {/* Restaurant */}
+            {ticket.orderRestaurantName && (
+              <div className="col-span-1 sm:col-span-1">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wide">Restaurant</p>
+                <p className="text-sm font-semibold text-gray-800 truncate">{ticket.orderRestaurantName}</p>
+              </div>
+            )}
+            {/* Status */}
+            {ticket.orderStatus && (
+              <div>
+                <p className="text-[10px] text-gray-500 uppercase tracking-wide mb-0.5">Status</p>
+                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${statusStyle.bg} ${statusStyle.text}`}>
+                  {statusLabel}
+                </span>
+              </div>
+            )}
+            {/* Total */}
+            {(ticket.orderTotal ?? 0) > 0 && (
+              <div>
+                <p className="text-[10px] text-gray-500 uppercase tracking-wide">Total</p>
+                <p className="text-sm font-bold text-gray-900">{formatCurrency(ticket.orderTotal!)}</p>
+              </div>
+            )}
+          </div>
+        </div>
+        {/* Link to orders page */}
+        {ticket.orderId && (
+          <a
+            href={`/orders?search=${ticket.orderId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 flex items-center gap-1 text-xs font-semibold text-amber-700 hover:text-amber-900 transition-colors mt-0.5"
+            title="Open order in Orders page"
+          >
+            <ExternalLink size={13} />
+            <span className="hidden sm:inline">View Order</span>
+          </a>
+        )}
+      </div>
     </div>
   )
 }
